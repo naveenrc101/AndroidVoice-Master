@@ -1,7 +1,9 @@
 package com.example.voicecallbouncer
 
+import android.Manifest
 import android.app.*
 import android.content.*
+import android.content.pm.PackageManager
 import android.content.pm.ServiceInfo
 import android.os.Build
 import android.os.Bundle
@@ -16,6 +18,7 @@ import android.telephony.TelephonyCallback
 import android.telephony.TelephonyManager
 import android.util.Log
 import androidx.core.app.NotificationCompat
+import androidx.core.content.ContextCompat
 
 /**
  * VoiceCommandService - Android 16 (API 36) Scoped Background Voice Control Service.
@@ -40,25 +43,36 @@ class VoiceCommandService : Service() {
     }
 
     private fun setupTelephonyListener() {
-        val callback = object : TelephonyCallback(), TelephonyCallback.CallStateListener {
-            override fun onCallStateChanged(state: Int) {
-                when (state) {
-                    TelephonyManager.CALL_STATE_RINGING -> {
-                        isPhoneRinging = true
-                        Log.d("VoiceCallBouncer", "Incoming call - starting voice recognition")
-                        recognitionIntent?.let { speechRecognizer.startListening(it) }
-                    }
-                    else -> {
-                        if (isPhoneRinging) {
-                            isPhoneRinging = false
-                            speechRecognizer.stopListening()
-                            Log.d("VoiceCallBouncer", "Call ended - stopping voice recognition")
+        if (ContextCompat.checkSelfPermission(this, Manifest.permission.READ_PHONE_STATE)
+            != PackageManager.PERMISSION_GRANTED) {
+            Log.e("VoiceCallBouncer", "READ_PHONE_STATE not granted — call detection disabled")
+            return
+        }
+        try {
+            val callback = object : TelephonyCallback(), TelephonyCallback.CallStateListener {
+                override fun onCallStateChanged(state: Int) {
+                    when (state) {
+                        TelephonyManager.CALL_STATE_RINGING -> {
+                            isPhoneRinging = true
+                            Log.d("VoiceCallBouncer", "Incoming call — starting voice recognition")
+                            if (::speechRecognizer.isInitialized) {
+                                recognitionIntent?.let { speechRecognizer.startListening(it) }
+                            }
+                        }
+                        else -> {
+                            if (isPhoneRinging) {
+                                isPhoneRinging = false
+                                if (::speechRecognizer.isInitialized) speechRecognizer.stopListening()
+                                Log.d("VoiceCallBouncer", "Call ended — stopping voice recognition")
+                            }
                         }
                     }
                 }
             }
+            telephonyManager.registerTelephonyCallback(mainExecutor, callback)
+        } catch (e: SecurityException) {
+            Log.e("VoiceCallBouncer", "Failed to register telephony callback: ${e.message}")
         }
-        telephonyManager.registerTelephonyCallback(mainExecutor, callback)
     }
 
     private fun initializeOfflineSpeechRecognizer() {
@@ -73,9 +87,9 @@ class VoiceCommandService : Service() {
 
         recognitionIntent = Intent(RecognizerIntent.ACTION_RECOGNIZE_SPEECH).apply {
             putExtra(RecognizerIntent.EXTRA_LANGUAGE_MODEL, RecognizerIntent.LANGUAGE_MODEL_FREE_FORM)
-            putExtra(RecognizerIntent.EXTRA_PREFER_OFFLINE, true)
             putExtra(RecognizerIntent.EXTRA_PARTIAL_RESULTS, true)
-            putExtra(RecognizerIntent.EXTRA_SPEECH_INPUT_MINIMUM_LENGTH_MILLIS, 1000)
+            // No minimum length — short words like "answer" must not be dropped
+            // No EXTRA_PREFER_OFFLINE — allow cloud recognition for better accuracy
         }
 
         speechRecognizer.setRecognitionListener(object : RecognitionListener {
@@ -87,9 +101,11 @@ class VoiceCommandService : Service() {
             }
 
             override fun onError(error: Int) {
+                Log.w("VoiceCallBouncer", "Recognition error code: $error")
                 if (isPhoneRinging) {
                     Handler(Looper.getMainLooper()).postDelayed({
-                        speechRecognizer.startListening(recognitionIntent!!)
+                        // Re-check isPhoneRinging — call may have ended during the delay
+                        if (isPhoneRinging) speechRecognizer.startListening(recognitionIntent!!)
                     }, 1000)
                 }
             }
@@ -127,7 +143,9 @@ class VoiceCommandService : Service() {
                 Log.i("VoiceCallBouncer", "Call rejected via voice command: $command")
             }
         } catch (e: SecurityException) {
-            Log.e("VoiceCallBouncer", "Android 16 Security Exception: Missing ANSWER_PHONE_CALLS: " + e.message)
+            Log.e("VoiceCallBouncer", "Permission denied — ANSWER_PHONE_CALLS not granted: ${e.message}")
+        } catch (e: Exception) {
+            Log.e("VoiceCallBouncer", "Failed to handle call command: ${e.message}")
         }
     }
 
