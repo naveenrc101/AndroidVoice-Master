@@ -16,7 +16,7 @@ export const ArchitectDashboard: React.FC<ArchitectDashboardProps> = ({
   onChangeConfig,
   isServiceRunning,
 }) => {
-  const [activeTab, setActiveTab] = useState<'service' | 'activity' | 'manifest' | 'gradle' | 'apk-guide'>('service');
+  const [activeTab, setActiveTab] = useState<'service' | 'activity' | 'manifest' | 'gradle' | 'github' | 'apk-guide'>('service');
   const [copied, setCopied] = useState<string | null>(null);
   
   // Custom keyword inputs
@@ -510,12 +510,62 @@ android.applicationVariants.all { variant ->
 }`;
   };
 
+  const getGithubWorkflowCode = () => {
+    return `# .github/workflows/android.yml
+# This automated CI config generates a secure, compiled debug .APK on GitHub Cloud.
+# It automatically bootstraps missing Gradle wrapper files to solve the 'gradlew not found' error!
+
+name: Android CI - Compile VoiceCallBouncer APK
+
+on:
+  push:
+    branches: [ "main", "master" ]
+  pull_request:
+    branches: [ "main", "master" ]
+  workflow_dispatch: # Allows manual trigger directly from your GitHub Actions UI tab
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+
+    steps:
+    - name: Checkout Repository Code
+      uses: actions/checkout@v4
+
+    - name: Set up JDK 17
+      uses: actions/setup-java@v4
+      with:
+        distribution: 'zulu'
+        java-version: '17'
+        cache: 'gradle'
+
+    - name: Dynamically Bootstrap missing Gradle Wrapper
+      run: |
+        echo "=== Bootstrapping Gradle Wrapper to solve gradlew not found error ==="
+        gradle wrapper --gradle-version 8.7
+
+    - name: Grant Execute Permissions to Gradlew
+      run: chmod +x gradlew
+
+    - name: Build Debug Application APK
+      run: ./gradlew assembleDebug --stacktrace
+
+    - name: Upload Compiled APK Artifact
+      uses: actions/upload-artifact@v4
+      with:
+        name: VoiceCallBouncer-Pixel10Pro-DebugAPK
+        path: app/build/outputs/apk/debug/app-debug.apk
+        retention-days: 7
+`;
+  };
+
   const getCodeString = () => {
     switch (activeTab) {
       case 'service': return getServiceCode();
       case 'activity': return getMainActivityCode();
       case 'manifest': return getManifestCode();
       case 'gradle': return getGradleCode();
+      case 'github': return getGithubWorkflowCode();
       default: return '';
     }
   };
@@ -526,6 +576,7 @@ android.applicationVariants.all { variant ->
       case 'activity': return 'MainActivity.kt';
       case 'manifest': return 'AndroidManifest.xml';
       case 'gradle': return 'build.gradle.kts';
+      case 'github': return '.github/workflows/android.yml';
       case 'apk-guide': return 'Pixel 10 Pro APK Build Guide';
     }
   };
@@ -737,6 +788,12 @@ android.applicationVariants.all { variant ->
               build.gradle.kts
             </button>
             <button
+              onClick={() => setActiveTab('github')}
+              className={`px-3 py-1.5 rounded-lg text-xs font-mono font-bold transition-all ${activeTab === 'github' ? 'bg-cyan-950 text-cyan-400 border border-cyan-900/60' : 'text-neutral-400 hover:text-white'}`}
+            >
+              🚀 GitHub Workflow (.yml)
+            </button>
+            <button
               onClick={() => setActiveTab('apk-guide')}
               className={`px-3 py-1.5 rounded-lg text-xs font-mono font-bold transition-all ${activeTab === 'apk-guide' ? 'bg-indigo-950/70 text-indigo-300 border border-indigo-800/60 select-none animate-pulse' : 'text-neutral-400 hover:text-white'}`}
             >
@@ -789,7 +846,7 @@ android.applicationVariants.all { variant ->
 
           {/* Conditional Workspack View */}
           {activeTab === 'apk-guide' ? (
-            <div className="flex-1 overflow-auto p-5 text-xs bg-[#0F1115] space-y-4 text-neutral-300">
+            <div className="flex-1 overflow-auto p-5 text-xs bg-[#0F1115] space-y-5 text-neutral-300">
               
               {/* Highlight Target Banner */}
               <div className="bg-indigo-950/20 border border-indigo-500/30 rounded-xl p-3.5 flex items-center justify-between">
@@ -797,31 +854,90 @@ android.applicationVariants.all { variant ->
                   <span className="text-[10px] uppercase font-bold tracking-widest font-mono text-indigo-400">Recommended Device Target</span>
                   <h5 className="text-sm font-black text-white mt-0.5">Google Pixel 10 Pro (Android 16 • API 36)</h5>
                 </div>
-                <span className="px-2.5 py-1 bg-indigo-900/60 border border-indigo-700/50 rounded-lg text-xs font-mono font-bold text-indigo-200">
+                <span className="px-2.5 py-1 bg-indigo-905/60 border border-indigo-700/50 rounded-lg text-xs font-mono font-bold text-indigo-200">
                   SDK 36
                 </span>
               </div>
 
-              {/* Step By Step List Container */}
+              {/* Selector Option A Header */}
+              <div className="border-b border-[#2D3139] pb-2">
+                <span className="text-[10px] font-mono text-cyan-400 font-bold uppercase select-none">Option A: Online Cloud Build (Recommended • Setup-Free)</span>
+                <p className="text-neutral-400 text-[11px] mt-0.5">Build the application on GitHub without installing any software locally.</p>
+              </div>
+
+              {/* GitHub CI Steps */}
               <div className="space-y-4">
-                
-                {/* Step 1 */}
+                {/* Step A1 */}
                 <div className="flex gap-3">
-                  <div className="w-6 h-6 rounded-full bg-cyan-950 border border-cyan-500 text-cyan-400 flex items-center justify-center font-bold text-[10px] font-mono shrink-0">
-                    01
+                  <div className="w-6 h-6 rounded-full bg-indigo-950 border border-indigo-500 text-indigo-400 flex items-center justify-center font-bold text-[10px] font-mono shrink-0">
+                    A1
                   </div>
                   <div>
-                    <h6 className="font-bold text-white text-xs">Export App Blueprint ZIP</h6>
+                    <h6 className="font-bold text-white text-xs">Create a GitHub Repository</h6>
                     <p className="text-neutral-400 text-[11px] mt-0.5 leading-relaxed">
-                      Select the <strong className="text-neutral-200">Settings</strong> menu icon at the top corner of your screen in Google AI Studio, then select <strong className="text-neutral-200">Export as ZIP</strong>. This bundles all configuration, source templates, and architecture parameters.
+                      Go to <a href="https://github.com" target="_blank" rel="noopener noreferrer" className="text-cyan-400 hover:underline">GitHub</a> and create a new repository (either Public or Private). Named it <span className="text-neutral-200 font-semibold font-mono">VoiceCallBouncer</span>.
                     </p>
                   </div>
                 </div>
 
-                {/* Step 2 */}
+                {/* Step A2 */}
+                <div className="flex gap-3">
+                  <div className="w-6 h-6 rounded-full bg-indigo-950 border border-indigo-500 text-indigo-400 flex items-center justify-center font-bold text-[10px] font-mono shrink-0">
+                    A2
+                  </div>
+                  <div>
+                    <h6 className="font-bold text-white text-xs">Arrive Repository Folder Structure</h6>
+                    <p className="text-neutral-400 text-[11px] mt-0.5 leading-relaxed">
+                      Initialize the following files inside your repository:
+                    </p>
+                    <div className="bg-[#0A0B0E] p-2 rounded-lg border border-[#2D3139] font-mono text-[10px] text-neutral-400 mt-1.5 space-y-1">
+                      <div>📁 <span className="text-cyan-400">.github/workflows/android.yml</span> <span className="text-neutral-500">(Paste code from the "GitHub Workflow" tab)</span></div>
+                      <div>📁 <span className="text-cyan-400">build.gradle.kts</span> <span className="text-neutral-500">(Paste code from the "build.gradle.kts" tab)</span></div>
+                      <div>📁 <span className="text-cyan-400">app/src/main/AndroidManifest.xml</span> <span className="text-neutral-500">(Paste code from "AndroidManifest.xml" tab)</span></div>
+                      <div>📁 <span className="text-cyan-400">app/src/main/java/com/example/voicecallbouncer/MainActivity.kt</span></div>
+                      <div>📁 <span className="text-cyan-400">app/src/main/java/com/example/voicecallbouncer/VoiceCommandService.kt</span></div>
+                    </div>
+                  </div>
+                </div>
+
+                {/* Step A3 */}
+                <div className="flex gap-3">
+                  <div className="w-6 h-6 rounded-full bg-indigo-950 border border-indigo-500 text-indigo-400 flex items-center justify-center font-bold text-[10px] font-mono shrink-0">
+                    A3
+                  </div>
+                  <div>
+                    <h6 className="font-bold text-white text-xs">Run GitHub Action Workflow and Download APK</h6>
+                    <p className="text-neutral-400 text-[11px] mt-0.5 leading-relaxed">
+                      Push your files! Navigate to the <strong className="text-neutral-200">Actions</strong> tab inside GitHub. Select "Android CI Build" and watch the runner execute. Once completed, scroll down to the <strong className="text-emerald-400">Artifacts section</strong> to find your compiled <strong className="text-cyan-450">VoiceCallBouncer-Pixel10Pro-DebugAPK</strong> ready to download!
+                    </p>
+                  </div>
+                </div>
+              </div>
+
+              {/* Selector Option B Header */}
+              <div className="border-b border-[#2D3139] pb-2 pt-2">
+                <span className="text-[10px] font-mono text-cyan-400 font-bold uppercase select-none">Option B: Offline PC Build (Requires Android Studio)</span>
+                <p className="text-neutral-400 text-[11px] mt-0.5">Build directly using your own workstation.</p>
+              </div>
+
+              <div className="space-y-4">
+                {/* Step B1 */}
                 <div className="flex gap-3">
                   <div className="w-6 h-6 rounded-full bg-cyan-950 border border-cyan-500 text-cyan-400 flex items-center justify-center font-bold text-[10px] font-mono shrink-0">
-                    02
+                    B1
+                  </div>
+                  <div>
+                    <h6 className="font-bold text-white text-xs">Export Code Blueprint</h6>
+                    <p className="text-neutral-400 text-[11px] mt-0.5 leading-relaxed">
+                      Select the <strong className="text-neutral-200">Settings</strong> menu icon at the top corner of your screen in Google AI Studio, then select <strong className="text-neutral-200">Export as ZIP</strong>. This bundles all the visual configuration assets.
+                    </p>
+                  </div>
+                </div>
+
+                {/* Step B2 */}
+                <div className="flex gap-3">
+                  <div className="w-6 h-6 rounded-full bg-cyan-950 border border-cyan-500 text-cyan-400 flex items-center justify-center font-bold text-[10px] font-mono shrink-0">
+                    B2
                   </div>
                   <div>
                     <h6 className="font-bold text-white text-xs">Bootstrap Android Studio Project</h6>
@@ -831,10 +947,10 @@ android.applicationVariants.all { variant ->
                   </div>
                 </div>
 
-                {/* Step 3 */}
+                {/* Step B3 */}
                 <div className="flex gap-3">
                   <div className="w-6 h-6 rounded-full bg-cyan-950 border border-cyan-500 text-cyan-400 flex items-center justify-center font-bold text-[10px] font-mono shrink-0">
-                    03
+                    B3
                   </div>
                   <div>
                     <h6 className="font-bold text-white text-xs">Load Kotlin Files</h6>
@@ -849,10 +965,10 @@ android.applicationVariants.all { variant ->
                   </div>
                 </div>
 
-                {/* Step 4 */}
+                {/* Step B4 */}
                 <div className="flex gap-3">
                   <div className="w-6 h-6 rounded-full bg-cyan-950 border border-cyan-500 text-cyan-400 flex items-center justify-center font-bold text-[10px] font-mono shrink-0">
-                    04
+                    B4
                   </div>
                   <div>
                     <h6 className="font-bold text-white text-xs">Unlock Pixel 10 Pro USB Debugging</h6>
@@ -862,15 +978,15 @@ android.applicationVariants.all { variant ->
                   </div>
                 </div>
 
-                {/* Step 5 */}
+                {/* Step B5 */}
                 <div className="flex gap-3">
                   <div className="w-6 h-6 rounded-full bg-cyan-950 border border-cyan-500 text-cyan-400 flex items-center justify-center font-bold text-[10px] font-mono shrink-0">
-                    05
+                    B5
                   </div>
                   <div>
                     <h6 className="font-bold text-white text-xs">Compile and Distribute debug APK</h6>
                     <p className="text-neutral-400 text-[11px] mt-0.5 leading-relaxed">
-                      Plug your phone into your workstation via USB or establish Wireless Debugging. Inside Android Studio, click the <strong className="text-emerald-400">Run Button (Green Play Arrow)</strong> or trigger <strong className="text-neutral-200">Build &gt; Build Bundle(s) / APK(s) &gt; Build APK(s)</strong>. Transfer the resultant output binary to compile and host local bouncer processing instantly!
+                      Plug your phone into your workstation via USB or establish Wireless Debugging. Inside Android Studio, click the <strong className="text-emerald-400">Run Button (Green Play Arrow)</strong> or trigger <strong className="text-neutral-200">Build &gt; Build Bundle(s) / APK(s) &gt; Build APK(s)</strong>.
                     </p>
                   </div>
                 </div>
