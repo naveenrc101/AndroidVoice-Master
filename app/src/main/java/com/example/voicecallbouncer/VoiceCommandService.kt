@@ -2,10 +2,14 @@ package com.example.voicecallbouncer
 
 import android.app.*
 import android.content.*
+import android.content.pm.ServiceInfo
 import android.media.AudioDeviceInfo
 import android.media.AudioManager
+import android.os.Build
 import android.os.Bundle
+import android.os.Handler
 import android.os.IBinder
+import android.os.Looper
 import android.speech.RecognitionListener
 import android.speech.RecognizerIntent
 import android.speech.SpeechRecognizer
@@ -35,10 +39,7 @@ class VoiceCommandService : Service() {
         audioManager = getSystemService(Context.AUDIO_SERVICE) as AudioManager
         telecomManager = getSystemService(Context.TELECOM_SERVICE) as TelecomManager
         telephonyManager = getSystemService(Context.TELEPHONY_SERVICE) as TelephonyManager
-        
         setupTelephonyListener()
-        initializeOfflineSpeechRecognizer()
-        routeToBluetoothEarphones()
     }
 
     private fun setupTelephonyListener() {
@@ -47,6 +48,7 @@ class VoiceCommandService : Service() {
                 isPhoneRinging = (state == TelephonyManager.CALL_STATE_RINGING)
                 if (isPhoneRinging) {
                     Log.d("VoiceCallBouncer", "Ringing Event Detected - Listening for voice commands")
+                    routeToBluetoothEarphones()
                 }
             }
         }
@@ -82,7 +84,9 @@ class VoiceCommandService : Service() {
 
             override fun onError(error: Int) {
                 // Recover from timeout or audio channel lock and restart speech analyzer
-                speechRecognizer.startListening(intent)
+                Handler(Looper.getMainLooper()).postDelayed({
+                    speechRecognizer.startListening(intent)
+                }, 1000)
             }
             
             override fun onReadyForSpeech(params: Bundle?) {}
@@ -127,16 +131,22 @@ class VoiceCommandService : Service() {
      */
     private fun routeToBluetoothEarphones() {
         try {
-            val devices = audioManager.availableCommunicationDevices
-            val bleDevice = devices.find { 
-                it.type == AudioDeviceInfo.TYPE_BLE_HEADSET || 
-                it.type == AudioDeviceInfo.TYPE_BLUETOOTH_SCO 
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {
+                val devices = audioManager.availableCommunicationDevices
+                val bleDevice = devices.find {
+                    it.type == AudioDeviceInfo.TYPE_BLE_HEADSET ||
+                    it.type == AudioDeviceInfo.TYPE_BLUETOOTH_SCO
+                }
+                bleDevice?.let {
+                    audioManager.setCommunicationDevice(it)
+                    Log.d("VoiceCallBouncer", "Routed audio to BLE device: ${it.productName}")
+                } ?: Log.w("VoiceCallBouncer", "No BLE/SCO device found. Using built-in mic.")
+            } else {
+                // API 30 fallback: use legacy Bluetooth SCO
+                audioManager.startBluetoothSco()
+                audioManager.isBluetoothScoOn = true
+                Log.d("VoiceCallBouncer", "Started Bluetooth SCO (legacy API 30 path)")
             }
-
-            bleDevice?.let {
-                val success = audioManager.setCommunicationDevice(it)
-                Log.d("VoiceCallBouncer", "Audio focus forced to BLE Earphones [$$" + "{it.productName}]. Success: $$success")
-            } ?: Log.w("VoiceCallBouncer", "No BLE Headset or SCO device online. Staying on built-in speaker.")
         } catch (e: Exception) {
             Log.e("VoiceCallBouncer", "AudioManager error: " + e.message)
         }
@@ -153,8 +163,14 @@ class VoiceCommandService : Service() {
             .setCategory(Notification.CATEGORY_SERVICE)
             .build()
 
-        // Android 16 foreground validation for microphone type
-        startForeground(NOTIFICATION_ID, notification)
+        // Must declare service type on API 29+ before accessing microphone
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
+            startForeground(NOTIFICATION_ID, notification, ServiceInfo.FOREGROUND_SERVICE_TYPE_MICROPHONE)
+        } else {
+            startForeground(NOTIFICATION_ID, notification)
+        }
+        initializeOfflineSpeechRecognizer()
+        routeToBluetoothEarphones()
         return START_STICKY
     }
 
