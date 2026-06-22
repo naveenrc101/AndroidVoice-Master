@@ -142,10 +142,15 @@ class VoiceCommandService : Service() {
                     Log.d("VoiceCallBouncer", "Routed audio to BLE device: ${it.productName}")
                 } ?: Log.w("VoiceCallBouncer", "No BLE/SCO device found. Using built-in mic.")
             } else {
-                // API 30 fallback: use legacy Bluetooth SCO
-                audioManager.startBluetoothSco()
-                audioManager.isBluetoothScoOn = true
-                Log.d("VoiceCallBouncer", "Started Bluetooth SCO (legacy API 30 path)")
+                // API 30 fallback: only start SCO if a BT device is actually connected
+                @Suppress("DEPRECATION")
+                if (audioManager.isBluetoothScoAvailableOffCall) {
+                    audioManager.startBluetoothSco()
+                    audioManager.isBluetoothScoOn = true
+                    Log.d("VoiceCallBouncer", "Started Bluetooth SCO (legacy API 30 path)")
+                } else {
+                    Log.d("VoiceCallBouncer", "No Bluetooth device connected, using built-in mic")
+                }
             }
         } catch (e: Exception) {
             Log.e("VoiceCallBouncer", "AudioManager error: " + e.message)
@@ -156,7 +161,7 @@ class VoiceCommandService : Service() {
         createNotificationChannel()
         val notification = NotificationCompat.Builder(this, CHANNEL_ID)
             .setContentTitle("VoiceCallBouncer Dynamic Active")
-            .setContentText("Listening hands-free via Bluetooth Earphones...")
+            .setContentText("Listening for voice commands (say 'answer' or 'reject')")
             .setSmallIcon(android.R.drawable.ic_btn_speak_now)
             .setOngoing(true)
             .setForegroundServiceBehavior(NotificationCompat.FOREGROUND_SERVICE_IMMEDIATE)
