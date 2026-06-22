@@ -3,8 +3,6 @@ package com.example.voicecallbouncer
 import android.app.*
 import android.content.*
 import android.content.pm.ServiceInfo
-import android.media.AudioDeviceInfo
-import android.media.AudioManager
 import android.os.Build
 import android.os.Bundle
 import android.os.Handler
@@ -26,7 +24,6 @@ import androidx.core.app.NotificationCompat
 class VoiceCommandService : Service() {
 
     private lateinit var speechRecognizer: SpeechRecognizer
-    private lateinit var audioManager: AudioManager
     private lateinit var telecomManager: TelecomManager
     private lateinit var telephonyManager: TelephonyManager
     
@@ -36,7 +33,6 @@ class VoiceCommandService : Service() {
 
     override fun onCreate() {
         super.onCreate()
-        audioManager = getSystemService(Context.AUDIO_SERVICE) as AudioManager
         telecomManager = getSystemService(Context.TELECOM_SERVICE) as TelecomManager
         telephonyManager = getSystemService(Context.TELEPHONY_SERVICE) as TelephonyManager
         setupTelephonyListener()
@@ -48,7 +44,6 @@ class VoiceCommandService : Service() {
                 isPhoneRinging = (state == TelephonyManager.CALL_STATE_RINGING)
                 if (isPhoneRinging) {
                     Log.d("VoiceCallBouncer", "Ringing Event Detected - Listening for voice commands")
-                    routeToBluetoothEarphones()
                 }
             }
         }
@@ -125,38 +120,6 @@ class VoiceCommandService : Service() {
         }
     }
 
-    /**
-     * Modern Audio Device Routing using AudioManager API
-     * Routes background speech input hardware to connected Bluetooth BLE headgear.
-     */
-    private fun routeToBluetoothEarphones() {
-        try {
-            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {
-                val devices = audioManager.availableCommunicationDevices
-                val bleDevice = devices.find {
-                    it.type == AudioDeviceInfo.TYPE_BLE_HEADSET ||
-                    it.type == AudioDeviceInfo.TYPE_BLUETOOTH_SCO
-                }
-                bleDevice?.let {
-                    audioManager.setCommunicationDevice(it)
-                    Log.d("VoiceCallBouncer", "Routed audio to BLE device: ${it.productName}")
-                } ?: Log.w("VoiceCallBouncer", "No BLE/SCO device found. Using built-in mic.")
-            } else {
-                // API 30 fallback: only start SCO if a BT device is actually connected
-                @Suppress("DEPRECATION")
-                if (audioManager.isBluetoothScoAvailableOffCall) {
-                    audioManager.startBluetoothSco()
-                    audioManager.isBluetoothScoOn = true
-                    Log.d("VoiceCallBouncer", "Started Bluetooth SCO (legacy API 30 path)")
-                } else {
-                    Log.d("VoiceCallBouncer", "No Bluetooth device connected, using built-in mic")
-                }
-            }
-        } catch (e: Exception) {
-            Log.e("VoiceCallBouncer", "AudioManager error: " + e.message)
-        }
-    }
-
     override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
         createNotificationChannel()
         val notification = NotificationCompat.Builder(this, CHANNEL_ID)
@@ -175,7 +138,6 @@ class VoiceCommandService : Service() {
             startForeground(NOTIFICATION_ID, notification)
         }
         initializeOfflineSpeechRecognizer()
-        routeToBluetoothEarphones()
         return START_STICKY
     }
 

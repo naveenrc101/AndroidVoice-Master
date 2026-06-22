@@ -104,12 +104,12 @@ fun MainWorkspaceScreen(permissions: Array<String>) {
             ) {
                 Column(modifier = Modifier.weight(1f)) {
                     Text(
-                        text = "Bluetooth Detection Engine", 
+                        text = "Voice Command Listener",
                         fontWeight = FontWeight.Bold,
                         color = Color.Unspecified
                     )
                     Text(
-                        text = if (isServiceRunning) "Status: listening via BLE Audio..." else "Status: Service Dormant",
+                        text = if (isServiceRunning) "Status: Listening for voice commands..." else "Status: Off",
                         fontSize = 12.sp,
                         color = Color.Gray
                     )
@@ -141,8 +141,8 @@ fun MainWorkspaceScreen(permissions: Array<String>) {
         ) {
             Text(
                 text = "System Console:\n" + 
-                if (isServiceRunning) "> Starting VoiceCommandService...\n> Connected to TYPE_BLE_HEADSET\n> Offline state machine loaded.\n> Hands-free monitoring initialized." 
-                else "> Ready. Toggle the Switch to wake service. Please ensure headphones are bound.",
+                if (isServiceRunning) "> VoiceCommandService running...\n> Listening for incoming calls.\n> Say 'answer' to accept or 'reject' to decline.\n> Works with built-in mic and earphones."
+                else "> Toggle the switch to enable voice commands.",
                 fontFamily = FontFamily.Monospace,
                 fontSize = 11.sp,
                 color = if (isServiceRunning) Color.Green else Color.Yellow
