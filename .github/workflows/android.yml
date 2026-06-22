@@ -29,7 +29,7 @@ jobs:
     - name: Dynamically Bootstrap missing Gradle Wrapper
       run: |
         echo "=== Bootstrapping Gradle Wrapper to solve gradlew not found error ==="
-        gradle wrapper --gradle-version 8.7
+        gradle wrapper --gradle-version 8.5
 
     - name: Grant Execute Permissions to Gradlew
       run: chmod +x gradlew
