@@ -28,6 +28,7 @@ class VoiceCommandService : Service() {
     private lateinit var telephonyManager: TelephonyManager
     
     private var isPhoneRinging = false
+    private var recognitionIntent: Intent? = null
     private val NOTIFICATION_ID = 101
     private val CHANNEL_ID = "VoiceBouncerChannel"
 
@@ -41,9 +42,19 @@ class VoiceCommandService : Service() {
     private fun setupTelephonyListener() {
         val callback = object : TelephonyCallback(), TelephonyCallback.CallStateListener {
             override fun onCallStateChanged(state: Int) {
-                isPhoneRinging = (state == TelephonyManager.CALL_STATE_RINGING)
-                if (isPhoneRinging) {
-                    Log.d("VoiceCallBouncer", "Ringing Event Detected - Listening for voice commands")
+                when (state) {
+                    TelephonyManager.CALL_STATE_RINGING -> {
+                        isPhoneRinging = true
+                        Log.d("VoiceCallBouncer", "Incoming call - starting voice recognition")
+                        recognitionIntent?.let { speechRecognizer.startListening(it) }
+                    }
+                    else -> {
+                        if (isPhoneRinging) {
+                            isPhoneRinging = false
+                            speechRecognizer.stopListening()
+                            Log.d("VoiceCallBouncer", "Call ended - stopping voice recognition")
+                        }
+                    }
                 }
             }
         }
@@ -60,9 +71,9 @@ class VoiceCommandService : Service() {
             Log.w("VoiceCallBouncer", "Standard Speech Engine initiated (On-Device sandbox unavailable)")
         }
 
-        val intent = Intent(RecognizerIntent.ACTION_RECOGNIZE_SPEECH).apply {
+        recognitionIntent = Intent(RecognizerIntent.ACTION_RECOGNIZE_SPEECH).apply {
             putExtra(RecognizerIntent.EXTRA_LANGUAGE_MODEL, RecognizerIntent.LANGUAGE_MODEL_FREE_FORM)
-            putExtra(RecognizerIntent.EXTRA_PREFER_OFFLINE, true) // Force total hardware offline mode
+            putExtra(RecognizerIntent.EXTRA_PREFER_OFFLINE, true)
             putExtra(RecognizerIntent.EXTRA_PARTIAL_RESULTS, true)
             putExtra(RecognizerIntent.EXTRA_SPEECH_INPUT_MINIMUM_LENGTH_MILLIS, 1000)
         }
@@ -70,35 +81,33 @@ class VoiceCommandService : Service() {
         speechRecognizer.setRecognitionListener(object : RecognitionListener {
             override fun onResults(results: Bundle?) {
                 val matches = results?.getStringArrayList(SpeechRecognizer.RESULTS_RECOGNITION)
-                matches?.forEach { command ->
-                    processCommand(command.lowercase())
-                }
-                // Restart listening for 24/7 background continuous capture
-                speechRecognizer.startListening(intent)
+                matches?.forEach { command -> processCommand(command.lowercase()) }
+                // Keep listening only while the call is still ringing
+                if (isPhoneRinging) speechRecognizer.startListening(recognitionIntent!!)
             }
 
             override fun onError(error: Int) {
-                // Recover from timeout or audio channel lock and restart speech analyzer
-                Handler(Looper.getMainLooper()).postDelayed({
-                    speechRecognizer.startListening(intent)
-                }, 1000)
+                if (isPhoneRinging) {
+                    Handler(Looper.getMainLooper()).postDelayed({
+                        speechRecognizer.startListening(recognitionIntent!!)
+                    }, 1000)
+                }
             }
-            
+
             override fun onReadyForSpeech(params: Bundle?) {}
             override fun onBeginningOfSpeech() {}
             override fun onRmsChanged(rmsdB: Float) {}
             override fun onBufferReceived(buffer: ByteArray?) {}
             override fun onEndOfSpeech() {}
             override fun onPartialResults(partialResults: Bundle?) {
-                // Immediate wake-word detection for rapid execution
-                partialResults?.getStringArrayList(SpeechRecognizer.RESULTS_RECOGNITION)?.firstOrNull()?.let {
-                    processCommand(it.lowercase())
+                if (isPhoneRinging) {
+                    partialResults?.getStringArrayList(SpeechRecognizer.RESULTS_RECOGNITION)
+                        ?.firstOrNull()?.let { processCommand(it.lowercase()) }
                 }
             }
             override fun onEvent(eventType: Int, params: Bundle?) {}
         })
-
-        speechRecognizer.startListening(intent)
+        // Do NOT startListening here — wait for an incoming call
     }
 
     private fun processCommand(command: String) {
@@ -107,13 +116,15 @@ class VoiceCommandService : Service() {
         try {
             // Evaluated dynamic triggers from Android Architect Configurator
             if (command.contains("answer") || command.contains("accept")) {
+                isPhoneRinging = false
+                speechRecognizer.stopListening()
                 telecomManager.acceptRingingCall()
-                Log.i("VoiceCallBouncer", "SUCCESS: Ringing call accepted hands-free via spoken cue '$" + "command'")
-                isPhoneRinging = false
+                Log.i("VoiceCallBouncer", "Call accepted via voice command: $command")
             } else if (command.contains("reject") || command.contains("decline")) {
-                telecomManager.endCall()
-                Log.i("VoiceCallBouncer", "SUCCESS: Ringing call rejected/bounced hands-free via spoken cue '$" + "command'")
                 isPhoneRinging = false
+                speechRecognizer.stopListening()
+                telecomManager.endCall()
+                Log.i("VoiceCallBouncer", "Call rejected via voice command: $command")
             }
         } catch (e: SecurityException) {
             Log.e("VoiceCallBouncer", "Android 16 Security Exception: Missing ANSWER_PHONE_CALLS: " + e.message)
@@ -124,7 +135,7 @@ class VoiceCommandService : Service() {
         createNotificationChannel()
         val notification = NotificationCompat.Builder(this, CHANNEL_ID)
             .setContentTitle("VoiceCallBouncer Dynamic Active")
-            .setContentText("Listening for voice commands (say 'answer' or 'reject')")
+            .setContentText("Ready — will listen when a call arrives")
             .setSmallIcon(android.R.drawable.ic_btn_speak_now)
             .setOngoing(true)
             .setForegroundServiceBehavior(NotificationCompat.FOREGROUND_SERVICE_IMMEDIATE)
