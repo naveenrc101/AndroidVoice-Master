@@ -34,6 +34,11 @@ class VoiceCommandService : Service() {
     private var retryCount = 0
     private val MAX_RETRIES = 15 // ~15 seconds of retries — covers speech service wake-up from deep idle
 
+    // Detects silent failures: if onReadyForSpeech hasn't fired within 3s of startListening(),
+    // the speech service didn't respond (common after 30+ min idle). Triggers a retry.
+    private val timeoutHandler = Handler(Looper.getMainLooper())
+    private val RECOGNITION_TIMEOUT_MS = 3000L
+
     private val NOTIFICATION_ID = 101
     private val CHANNEL_ID = "VoxlyChannel"
 
@@ -61,6 +66,7 @@ class VoiceCommandService : Service() {
         }
 
         override fun onError(error: Int) {
+            timeoutHandler.removeCallbacksAndMessages(null)
             Log.w("Voxly", "Recognition error: $error — retry $retryCount/$MAX_RETRIES")
             if (!isPhoneRinging || retryCount >= MAX_RETRIES) return
             retryCount++
@@ -81,7 +87,10 @@ class VoiceCommandService : Service() {
             }
         }
 
-        override fun onReadyForSpeech(params: Bundle?) { retryCount = 0 }
+        override fun onReadyForSpeech(params: Bundle?) {
+            retryCount = 0
+            timeoutHandler.removeCallbacksAndMessages(null)
+        }
         override fun onBeginningOfSpeech() {}
         override fun onRmsChanged(rmsdB: Float) {}
         override fun onBufferReceived(buffer: ByteArray?) {}
@@ -151,9 +160,21 @@ class VoiceCommandService : Service() {
             SpeechRecognizer.createSpeechRecognizer(this)
         speechRecognizer?.setRecognitionListener(recognitionListener)
         speechRecognizer?.startListening(recognitionIntent)
+
+        // Guard against silent failure — if onReadyForSpeech doesn't fire within 3s,
+        // the speech service didn't respond (common after extended Doze idle). Retry.
+        timeoutHandler.removeCallbacksAndMessages(null)
+        timeoutHandler.postDelayed({
+            if (isPhoneRinging && retryCount < MAX_RETRIES) {
+                Log.w("Voxly", "Recognition timeout — no response from service, retrying ($retryCount/$MAX_RETRIES)")
+                retryCount++
+                startVoiceRecognition()
+            }
+        }, RECOGNITION_TIMEOUT_MS)
     }
 
     private fun destroyRecognizer() {
+        timeoutHandler.removeCallbacksAndMessages(null)
         try {
             speechRecognizer?.stopListening()
             speechRecognizer?.destroy()
