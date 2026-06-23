@@ -240,7 +240,37 @@ class VoiceCommandService : Service() {
         isRunning = true
         getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE)
             .edit().putBoolean(KEY_SERVICE_ENABLED, true).apply()
+        testMicOnce()
         return START_STICKY
+    }
+
+    /** Opens the mic for 1 second on service start to confirm the speech service is alive
+     *  and permissions are granted. Has no effect on call handling. */
+    private fun testMicOnce() {
+        if (ContextCompat.checkSelfPermission(this, Manifest.permission.RECORD_AUDIO)
+            != PackageManager.PERMISSION_GRANTED) return
+        val testRecognizer = SpeechRecognizer.createSpeechRecognizer(this)
+        testRecognizer.setRecognitionListener(object : RecognitionListener {
+            override fun onReadyForSpeech(params: Bundle?) { Log.d("Voxly", "Mic self-test: ready") }
+            override fun onBeginningOfSpeech() {}
+            override fun onRmsChanged(rmsdB: Float) {}
+            override fun onBufferReceived(buffer: ByteArray?) {}
+            override fun onEndOfSpeech() {}
+            override fun onResults(results: Bundle?) {}
+            override fun onPartialResults(partialResults: Bundle?) {}
+            override fun onError(error: Int) { Log.w("Voxly", "Mic self-test error: $error") }
+            override fun onEvent(eventType: Int, params: Bundle?) {}
+        })
+        testRecognizer.startListening(recognitionIntent)
+        Handler(Looper.getMainLooper()).postDelayed({
+            try {
+                testRecognizer.stopListening()
+                testRecognizer.destroy()
+                Log.d("Voxly", "Mic self-test complete")
+            } catch (e: Exception) {
+                Log.w("Voxly", "Mic self-test cleanup: ${e.message}")
+            }
+        }, 1000L)
     }
 
     private fun createNotificationChannel() {
