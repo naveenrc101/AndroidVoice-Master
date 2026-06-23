@@ -25,13 +25,14 @@ import androidx.core.content.ContextCompat
 
 class VoiceCommandService : Service() {
 
-    private lateinit var speechRecognizer: SpeechRecognizer
+    private var speechRecognizer: SpeechRecognizer? = null
     private lateinit var telecomManager: TelecomManager
     private lateinit var telephonyManager: TelephonyManager
     private var wakeLock: PowerManager.WakeLock? = null
 
     private var isPhoneRinging = false
-    private var recognitionIntent: Intent? = null
+    private var retryCount = 0
+    private val MAX_RETRIES = 5
     private val NOTIFICATION_ID = 101
     private val CHANNEL_ID = "VoxlyChannel"
 
@@ -41,15 +42,59 @@ class VoiceCommandService : Service() {
         var isRunning = false
     }
 
+    // Built once, reused across recognizer instances
+    private val recognitionIntent by lazy {
+        Intent(RecognizerIntent.ACTION_RECOGNIZE_SPEECH).apply {
+            putExtra(RecognizerIntent.EXTRA_LANGUAGE_MODEL, RecognizerIntent.LANGUAGE_MODEL_FREE_FORM)
+            putExtra(RecognizerIntent.EXTRA_PARTIAL_RESULTS, true)
+            // Prefer on-device recognition — cloud speech can be restricted from
+            // background services on Android 14+ when screen is locked
+            putExtra(RecognizerIntent.EXTRA_PREFER_OFFLINE, true)
+        }
+    }
+
+    private val recognitionListener = object : RecognitionListener {
+        override fun onResults(results: Bundle?) {
+            retryCount = 0
+            results?.getStringArrayList(SpeechRecognizer.RESULTS_RECOGNITION)
+                ?.forEach { processCommand(it.lowercase()) }
+            // Keep listening if call is still ringing
+            if (isPhoneRinging) startVoiceRecognition()
+        }
+
+        override fun onError(error: Int) {
+            Log.w("Voxly", "Recognition error: $error — retries: $retryCount")
+            if (!isPhoneRinging || retryCount >= MAX_RETRIES) return
+            retryCount++
+            // Always recreate the recognizer on error — on Android 14/15 a stale
+            // recognizer causes ERROR_RECOGNIZER_BUSY (8) on the next startListening call
+            val delay = if (error == SpeechRecognizer.ERROR_RECOGNIZER_BUSY) 500L else 800L
+            Handler(Looper.getMainLooper()).postDelayed({
+                if (isPhoneRinging) startVoiceRecognition()
+            }, delay)
+        }
+
+        override fun onPartialResults(partialResults: Bundle?) {
+            if (isPhoneRinging) {
+                partialResults?.getStringArrayList(SpeechRecognizer.RESULTS_RECOGNITION)
+                    ?.firstOrNull()?.let { processCommand(it.lowercase()) }
+            }
+        }
+
+        override fun onReadyForSpeech(params: Bundle?) { retryCount = 0 }
+        override fun onBeginningOfSpeech() {}
+        override fun onRmsChanged(rmsdB: Float) {}
+        override fun onBufferReceived(buffer: ByteArray?) {}
+        override fun onEndOfSpeech() {}
+        override fun onEvent(eventType: Int, params: Bundle?) {}
+    }
+
     override fun onCreate() {
         super.onCreate()
         telecomManager = getSystemService(Context.TELECOM_SERVICE) as TelecomManager
         telephonyManager = getSystemService(Context.TELEPHONY_SERVICE) as TelephonyManager
         val powerManager = getSystemService(Context.POWER_SERVICE) as PowerManager
-        wakeLock = powerManager.newWakeLock(
-            PowerManager.PARTIAL_WAKE_LOCK,
-            "Voxly::CallWakeLock"
-        )
+        wakeLock = powerManager.newWakeLock(PowerManager.PARTIAL_WAKE_LOCK, "Voxly::CallWakeLock")
         setupTelephonyListener()
     }
 
@@ -64,22 +109,20 @@ class VoiceCommandService : Service() {
                 override fun onCallStateChanged(state: Int) {
                     when (state) {
                         TelephonyManager.CALL_STATE_RINGING -> {
+                            if (isPhoneRinging) return // already handling this call
                             isPhoneRinging = true
-                            // Acquire wake lock so CPU stays awake when screen is locked
-                            if (wakeLock?.isHeld == false) {
-                                wakeLock?.acquire(60_000L) // max 60s — enough for any ringing call
-                            }
+                            retryCount = 0
+                            if (wakeLock?.isHeld == false) wakeLock?.acquire(60_000L)
                             Log.d("Voxly", "Incoming call — starting voice recognition")
-                            if (::speechRecognizer.isInitialized) {
-                                recognitionIntent?.let { speechRecognizer.startListening(it) }
-                            }
+                            startVoiceRecognition()
                         }
                         else -> {
                             if (isPhoneRinging) {
                                 isPhoneRinging = false
+                                retryCount = 0
                                 if (wakeLock?.isHeld == true) wakeLock?.release()
-                                if (::speechRecognizer.isInitialized) speechRecognizer.stopListening()
-                                Log.d("Voxly", "Call ended — stopping voice recognition")
+                                destroyRecognizer()
+                                Log.d("Voxly", "Call ended — stopped voice recognition")
                             }
                         }
                     }
@@ -91,75 +134,64 @@ class VoiceCommandService : Service() {
         }
     }
 
-    private fun initializeOfflineSpeechRecognizer() {
-        // Destroy any existing recognizer before creating a new one
-        if (::speechRecognizer.isInitialized) {
-            speechRecognizer.destroy()
-        }
-        if (SpeechRecognizer.isOnDeviceRecognitionAvailable(this)) {
-            speechRecognizer = SpeechRecognizer.createOnDeviceSpeechRecognizer(this)
-            Log.i("Voxly", "On-Device Neural Engine initialized for speech processing")
-        } else {
-            speechRecognizer = SpeechRecognizer.createSpeechRecognizer(this)
-            Log.w("Voxly", "Standard Speech Engine initiated (On-Device sandbox unavailable)")
-        }
-
-        recognitionIntent = Intent(RecognizerIntent.ACTION_RECOGNIZE_SPEECH).apply {
-            putExtra(RecognizerIntent.EXTRA_LANGUAGE_MODEL, RecognizerIntent.LANGUAGE_MODEL_FREE_FORM)
-            putExtra(RecognizerIntent.EXTRA_PARTIAL_RESULTS, true)
+    /**
+     * Creates a fresh SpeechRecognizer and starts listening.
+     * Called on every incoming call and on every error retry.
+     * Creating fresh avoids ERROR_RECOGNIZER_BUSY on Android 14/15.
+     */
+    private fun startVoiceRecognition() {
+        if (!isPhoneRinging) return
+        if (ContextCompat.checkSelfPermission(this, Manifest.permission.RECORD_AUDIO)
+            != PackageManager.PERMISSION_GRANTED) {
+            Log.e("Voxly", "RECORD_AUDIO not granted — cannot start recognition")
+            return
         }
 
-        speechRecognizer.setRecognitionListener(object : RecognitionListener {
-            override fun onResults(results: Bundle?) {
-                val matches = results?.getStringArrayList(SpeechRecognizer.RESULTS_RECOGNITION)
-                matches?.forEach { command -> processCommand(command.lowercase()) }
-                if (isPhoneRinging) speechRecognizer.startListening(recognitionIntent!!)
-            }
+        destroyRecognizer()
 
-            override fun onError(error: Int) {
-                Log.w("Voxly", "Recognition error code: $error")
-                if (isPhoneRinging) {
-                    Handler(Looper.getMainLooper()).postDelayed({
-                        if (isPhoneRinging) speechRecognizer.startListening(recognitionIntent!!)
-                    }, 1000)
-                }
-            }
+        speechRecognizer = if (SpeechRecognizer.isOnDeviceRecognitionAvailable(this))
+            SpeechRecognizer.createOnDeviceSpeechRecognizer(this)
+        else
+            SpeechRecognizer.createSpeechRecognizer(this)
 
-            override fun onReadyForSpeech(params: Bundle?) {}
-            override fun onBeginningOfSpeech() {}
-            override fun onRmsChanged(rmsdB: Float) {}
-            override fun onBufferReceived(buffer: ByteArray?) {}
-            override fun onEndOfSpeech() {}
-            override fun onPartialResults(partialResults: Bundle?) {
-                if (isPhoneRinging) {
-                    partialResults?.getStringArrayList(SpeechRecognizer.RESULTS_RECOGNITION)
-                        ?.firstOrNull()?.let { processCommand(it.lowercase()) }
-                }
-            }
-            override fun onEvent(eventType: Int, params: Bundle?) {}
-        })
+        speechRecognizer?.setRecognitionListener(recognitionListener)
+        speechRecognizer?.startListening(recognitionIntent)
+        Log.d("Voxly", "SpeechRecognizer started (fresh instance)")
+    }
+
+    private fun destroyRecognizer() {
+        try {
+            speechRecognizer?.stopListening()
+            speechRecognizer?.destroy()
+        } catch (e: Exception) {
+            Log.w("Voxly", "Error destroying recognizer: ${e.message}")
+        }
+        speechRecognizer = null
     }
 
     private fun processCommand(command: String) {
         if (!isPhoneRinging) return
 
         try {
-            if (command.contains("answer") || command.contains("accept")) {
-                isPhoneRinging = false
-                speechRecognizer.stopListening()
-                if (wakeLock?.isHeld == true) wakeLock?.release()
-                ToneGenerator(AudioManager.STREAM_NOTIFICATION, 100)
-                    .startTone(ToneGenerator.TONE_PROP_ACK, 300)
-                telecomManager.acceptRingingCall()
-                Log.i("Voxly", "Call accepted via voice command: $command")
-            } else if (command.contains("reject") || command.contains("decline")) {
-                isPhoneRinging = false
-                speechRecognizer.stopListening()
-                if (wakeLock?.isHeld == true) wakeLock?.release()
-                ToneGenerator(AudioManager.STREAM_NOTIFICATION, 100)
-                    .startTone(ToneGenerator.TONE_PROP_NACK, 300)
-                telecomManager.endCall()
-                Log.i("Voxly", "Call rejected via voice command: $command")
+            when {
+                command.contains("answer") || command.contains("accept") -> {
+                    isPhoneRinging = false
+                    if (wakeLock?.isHeld == true) wakeLock?.release()
+                    destroyRecognizer()
+                    ToneGenerator(AudioManager.STREAM_NOTIFICATION, 100)
+                        .startTone(ToneGenerator.TONE_PROP_ACK, 300)
+                    telecomManager.acceptRingingCall()
+                    Log.i("Voxly", "Call accepted via voice command: $command")
+                }
+                command.contains("reject") || command.contains("decline") -> {
+                    isPhoneRinging = false
+                    if (wakeLock?.isHeld == true) wakeLock?.release()
+                    destroyRecognizer()
+                    ToneGenerator(AudioManager.STREAM_NOTIFICATION, 100)
+                        .startTone(ToneGenerator.TONE_PROP_NACK, 300)
+                    telecomManager.endCall()
+                    Log.i("Voxly", "Call rejected via voice command: $command")
+                }
             }
         } catch (e: SecurityException) {
             Log.e("Voxly", "Permission denied — ANSWER_PHONE_CALLS not granted: ${e.message}")
@@ -184,7 +216,7 @@ class VoiceCommandService : Service() {
         } else {
             startForeground(NOTIFICATION_ID, notification)
         }
-        initializeOfflineSpeechRecognizer()
+
         isRunning = true
         getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE)
             .edit().putBoolean(KEY_SERVICE_ENABLED, true).apply()
@@ -196,11 +228,8 @@ class VoiceCommandService : Service() {
             CHANNEL_ID,
             "Voice Command Engine Channel",
             NotificationManager.IMPORTANCE_LOW
-        ).apply {
-            description = "Provides status for voice call bouncer."
-        }
-        val manager = getSystemService(NotificationManager::class.java)
-        manager.createNotificationChannel(channel)
+        ).apply { description = "Provides status for Voxly." }
+        getSystemService(NotificationManager::class.java).createNotificationChannel(channel)
     }
 
     override fun onBind(intent: Intent?): IBinder? = null
@@ -208,8 +237,8 @@ class VoiceCommandService : Service() {
     override fun onDestroy() {
         isRunning = false
         if (wakeLock?.isHeld == true) wakeLock?.release()
-        if (::speechRecognizer.isInitialized) speechRecognizer.destroy()
-        Log.i("Voxly", "Service shut down. Voice listening stopped.")
+        destroyRecognizer()
+        Log.i("Voxly", "Service shut down.")
         super.onDestroy()
     }
 }
