@@ -10,23 +10,26 @@ import android.os.Bundle
 import android.os.Handler
 import android.os.IBinder
 import android.os.Looper
-import android.media.AudioManager
-import android.media.ToneGenerator
 import android.speech.RecognitionListener
 import android.speech.RecognizerIntent
 import android.speech.SpeechRecognizer
 import android.telecom.TelecomManager
 import android.telephony.TelephonyCallback
 import android.telephony.TelephonyManager
+import android.speech.tts.TextToSpeech
+import android.speech.tts.UtteranceProgressListener
 import android.util.Log
 import androidx.core.app.NotificationCompat
 import androidx.core.content.ContextCompat
+import java.util.Locale
 
 class VoiceCommandService : Service() {
 
     private lateinit var speechRecognizer: SpeechRecognizer
     private lateinit var telecomManager: TelecomManager
     private lateinit var telephonyManager: TelephonyManager
+    private lateinit var textToSpeech: TextToSpeech
+    private var ttsReady = false
 
     private var isPhoneRinging = false
     private var recognitionIntent: Intent? = null
@@ -43,6 +46,12 @@ class VoiceCommandService : Service() {
         super.onCreate()
         telecomManager = getSystemService(Context.TELECOM_SERVICE) as TelecomManager
         telephonyManager = getSystemService(Context.TELEPHONY_SERVICE) as TelephonyManager
+        textToSpeech = TextToSpeech(this) { status ->
+            if (status == TextToSpeech.SUCCESS) {
+                textToSpeech.language = Locale.getDefault()
+                ttsReady = true
+            }
+        }
         setupTelephonyListener()
     }
 
@@ -133,25 +142,44 @@ class VoiceCommandService : Service() {
     private fun processCommand(command: String) {
         if (!isPhoneRinging) return
 
-        try {
-            // Evaluated dynamic triggers from Android Architect Configurator
-            if (command.contains("answer") || command.contains("accept")) {
+        when {
+            command.contains("answer") || command.contains("accept") -> {
                 isPhoneRinging = false
                 speechRecognizer.stopListening()
-                ToneGenerator(AudioManager.STREAM_NOTIFICATION, 100)
-                    .startTone(ToneGenerator.TONE_PROP_ACK, 300)
-                telecomManager.acceptRingingCall()
-                Log.i("VoiceCallBouncer", "Call accepted via voice command: $command")
-            } else if (command.contains("reject") || command.contains("decline")) {
-                isPhoneRinging = false
-                speechRecognizer.stopListening()
-                telecomManager.endCall()
-                Log.i("VoiceCallBouncer", "Call rejected via voice command: $command")
+                speakThenAct("Answering") {
+                    try {
+                        telecomManager.acceptRingingCall()
+                        Log.i("VoiceCallBouncer", "Call accepted via voice command")
+                    } catch (e: Exception) {
+                        Log.e("VoiceCallBouncer", "Failed to accept call: ${e.message}")
+                    }
+                }
             }
-        } catch (e: SecurityException) {
-            Log.e("VoiceCallBouncer", "Permission denied — ANSWER_PHONE_CALLS not granted: ${e.message}")
-        } catch (e: Exception) {
-            Log.e("VoiceCallBouncer", "Failed to handle call command: ${e.message}")
+            command.contains("reject") || command.contains("decline") -> {
+                isPhoneRinging = false
+                speechRecognizer.stopListening()
+                speakThenAct("Declining") {
+                    try {
+                        telecomManager.endCall()
+                        Log.i("VoiceCallBouncer", "Call rejected via voice command")
+                    } catch (e: Exception) {
+                        Log.e("VoiceCallBouncer", "Failed to reject call: ${e.message}")
+                    }
+                }
+            }
+        }
+    }
+
+    private fun speakThenAct(text: String, action: () -> Unit) {
+        if (ttsReady) {
+            textToSpeech.setOnUtteranceProgressListener(object : UtteranceProgressListener() {
+                override fun onDone(utteranceId: String?) { action() }
+                override fun onError(utteranceId: String?) { action() }
+                override fun onStart(utteranceId: String?) {}
+            })
+            textToSpeech.speak(text, TextToSpeech.QUEUE_FLUSH, null, "VCB_ACTION")
+        } else {
+            action()
         }
     }
 
@@ -212,6 +240,7 @@ class VoiceCommandService : Service() {
     override fun onDestroy() {
         isRunning = false
         if (::speechRecognizer.isInitialized) speechRecognizer.destroy()
+        if (::textToSpeech.isInitialized) textToSpeech.shutdown()
         Log.i("VoiceCallBouncer", "Service shut down. Voice listening stopped.")
         super.onDestroy()
     }
