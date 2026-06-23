@@ -10,26 +10,23 @@ import android.os.Bundle
 import android.os.Handler
 import android.os.IBinder
 import android.os.Looper
+import android.media.AudioManager
+import android.media.ToneGenerator
 import android.speech.RecognitionListener
 import android.speech.RecognizerIntent
 import android.speech.SpeechRecognizer
 import android.telecom.TelecomManager
 import android.telephony.TelephonyCallback
 import android.telephony.TelephonyManager
-import android.speech.tts.TextToSpeech
-import android.speech.tts.UtteranceProgressListener
 import android.util.Log
 import androidx.core.app.NotificationCompat
 import androidx.core.content.ContextCompat
-import java.util.Locale
 
 class VoiceCommandService : Service() {
 
     private lateinit var speechRecognizer: SpeechRecognizer
     private lateinit var telecomManager: TelecomManager
     private lateinit var telephonyManager: TelephonyManager
-    private var textToSpeech: TextToSpeech? = null
-    private var ttsReady = false
 
     private var isPhoneRinging = false
     private var recognitionIntent: Intent? = null
@@ -83,7 +80,6 @@ class VoiceCommandService : Service() {
     }
 
     private fun initializeOfflineSpeechRecognizer() {
-        // API 36/Android 16: Safe creation of on-device recognition engine
         if (SpeechRecognizer.isOnDeviceRecognitionAvailable(this)) {
             speechRecognizer = SpeechRecognizer.createOnDeviceSpeechRecognizer(this)
             Log.i("VoiceCallBouncer", "On-Device Neural Engine initialized for speech processing")
@@ -95,15 +91,12 @@ class VoiceCommandService : Service() {
         recognitionIntent = Intent(RecognizerIntent.ACTION_RECOGNIZE_SPEECH).apply {
             putExtra(RecognizerIntent.EXTRA_LANGUAGE_MODEL, RecognizerIntent.LANGUAGE_MODEL_FREE_FORM)
             putExtra(RecognizerIntent.EXTRA_PARTIAL_RESULTS, true)
-            // No minimum length — short words like "answer" must not be dropped
-            // No EXTRA_PREFER_OFFLINE — allow cloud recognition for better accuracy
         }
 
         speechRecognizer.setRecognitionListener(object : RecognitionListener {
             override fun onResults(results: Bundle?) {
                 val matches = results?.getStringArrayList(SpeechRecognizer.RESULTS_RECOGNITION)
                 matches?.forEach { command -> processCommand(command.lowercase()) }
-                // Keep listening only while the call is still ringing
                 if (isPhoneRinging) speechRecognizer.startListening(recognitionIntent!!)
             }
 
@@ -111,7 +104,6 @@ class VoiceCommandService : Service() {
                 Log.w("VoiceCallBouncer", "Recognition error code: $error")
                 if (isPhoneRinging) {
                     Handler(Looper.getMainLooper()).postDelayed({
-                        // Re-check isPhoneRinging — call may have ended during the delay
                         if (isPhoneRinging) speechRecognizer.startListening(recognitionIntent!!)
                     }, 1000)
                 }
@@ -130,72 +122,38 @@ class VoiceCommandService : Service() {
             }
             override fun onEvent(eventType: Int, params: Bundle?) {}
         })
-        // Do NOT startListening here — wait for an incoming call
     }
 
     private fun processCommand(command: String) {
         if (!isPhoneRinging) return
 
-        when {
-            command.contains("answer") || command.contains("accept") -> {
+        try {
+            if (command.contains("answer") || command.contains("accept")) {
                 isPhoneRinging = false
                 speechRecognizer.stopListening()
-                speakThenAct("Answering") {
-                    try {
-                        telecomManager.acceptRingingCall()
-                        Log.i("VoiceCallBouncer", "Call accepted via voice command")
-                    } catch (e: Exception) {
-                        Log.e("VoiceCallBouncer", "Failed to accept call: ${e.message}")
-                    }
-                }
-            }
-            command.contains("reject") || command.contains("decline") -> {
+                ToneGenerator(AudioManager.STREAM_NOTIFICATION, 100)
+                    .startTone(ToneGenerator.TONE_PROP_ACK, 300)
+                telecomManager.acceptRingingCall()
+                Log.i("VoiceCallBouncer", "Call accepted via voice command: $command")
+            } else if (command.contains("reject") || command.contains("decline")) {
                 isPhoneRinging = false
                 speechRecognizer.stopListening()
-                speakThenAct("Declining") {
-                    try {
-                        telecomManager.endCall()
-                        Log.i("VoiceCallBouncer", "Call rejected via voice command")
-                    } catch (e: Exception) {
-                        Log.e("VoiceCallBouncer", "Failed to reject call: ${e.message}")
-                    }
-                }
+                ToneGenerator(AudioManager.STREAM_NOTIFICATION, 100)
+                    .startTone(ToneGenerator.TONE_PROP_NACK, 300)
+                telecomManager.endCall()
+                Log.i("VoiceCallBouncer", "Call rejected via voice command: $command")
             }
-        }
-    }
-
-    private fun speakThenAct(text: String, action: () -> Unit) {
-        fun doSpeak(tts: TextToSpeech) {
-            tts.setOnUtteranceProgressListener(object : UtteranceProgressListener() {
-                override fun onDone(utteranceId: String?) { action() }
-                override fun onError(utteranceId: String?) { action() }
-                override fun onStart(utteranceId: String?) {}
-            })
-            tts.speak(text, TextToSpeech.QUEUE_FLUSH, null, "VCB_ACTION")
-        }
-
-        when {
-            ttsReady && textToSpeech != null -> doSpeak(textToSpeech!!)
-            textToSpeech == null -> {
-                // Initialize TTS on first use — keeps audio resources free during listening
-                textToSpeech = TextToSpeech(this) { status ->
-                    if (status == TextToSpeech.SUCCESS) {
-                        textToSpeech?.language = Locale.getDefault()
-                        ttsReady = true
-                        doSpeak(textToSpeech!!)
-                    } else {
-                        action()
-                    }
-                }
-            }
-            else -> action() // TTS initializing but not ready yet — act immediately
+        } catch (e: SecurityException) {
+            Log.e("VoiceCallBouncer", "Permission denied — ANSWER_PHONE_CALLS not granted: ${e.message}")
+        } catch (e: Exception) {
+            Log.e("VoiceCallBouncer", "Failed to handle call command: ${e.message}")
         }
     }
 
     override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
         createNotificationChannel()
         val notification = NotificationCompat.Builder(this, CHANNEL_ID)
-            .setContentTitle("VoiceCallBouncer Dynamic Active")
+            .setContentTitle("VoiceCallBouncer Active")
             .setContentText("Ready — will listen when a call arrives")
             .setSmallIcon(android.R.drawable.ic_btn_speak_now)
             .setOngoing(true)
@@ -203,7 +161,6 @@ class VoiceCommandService : Service() {
             .setCategory(Notification.CATEGORY_SERVICE)
             .build()
 
-        // Must declare service type on API 29+ before accessing microphone
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
             startForeground(NOTIFICATION_ID, notification, ServiceInfo.FOREGROUND_SERVICE_TYPE_MICROPHONE)
         } else {
@@ -217,7 +174,6 @@ class VoiceCommandService : Service() {
     }
 
     override fun onTaskRemoved(rootIntent: Intent?) {
-        // App was swiped from recents — restart service silently
         val restartIntent = Intent(applicationContext, VoiceCommandService::class.java)
         val pendingIntent = android.app.PendingIntent.getService(
             applicationContext, 1, restartIntent,
@@ -234,11 +190,11 @@ class VoiceCommandService : Service() {
 
     private fun createNotificationChannel() {
         val channel = NotificationChannel(
-            CHANNEL_ID, 
-            "Voice Command Engine Channel", 
+            CHANNEL_ID,
+            "Voice Command Engine Channel",
             NotificationManager.IMPORTANCE_LOW
         ).apply {
-            description = "Provides status and activation state for continuous call-bouncer logic."
+            description = "Provides status for voice call bouncer."
         }
         val manager = getSystemService(NotificationManager::class.java)
         manager.createNotificationChannel(channel)
@@ -249,7 +205,6 @@ class VoiceCommandService : Service() {
     override fun onDestroy() {
         isRunning = false
         if (::speechRecognizer.isInitialized) speechRecognizer.destroy()
-        textToSpeech?.shutdown()
         Log.i("VoiceCallBouncer", "Service shut down. Voice listening stopped.")
         super.onDestroy()
     }
