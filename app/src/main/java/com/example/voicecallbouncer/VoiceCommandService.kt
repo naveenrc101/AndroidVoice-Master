@@ -33,6 +33,9 @@ class VoiceCommandService : Service() {
     private var isPhoneRinging = false
     private var retryCount = 0
     private val MAX_RETRIES = 15 // ~15 seconds of retries — covers speech service wake-up from deep idle
+    // Held as a member so the GC cannot collect it after setupTelephonyListener() returns.
+    // A collected callback silently stops receiving CALL_STATE_RINGING after 30+ min idle.
+    private var telephonyCallback: TelephonyCallback? = null
 
     // Detects silent failures: if onReadyForSpeech hasn't fired within 3s of startListening(),
     // the speech service didn't respond (common after 30+ min idle). Triggers a retry.
@@ -114,7 +117,7 @@ class VoiceCommandService : Service() {
             return
         }
         try {
-            val callback = object : TelephonyCallback(), TelephonyCallback.CallStateListener {
+            telephonyCallback = object : TelephonyCallback(), TelephonyCallback.CallStateListener {
                 override fun onCallStateChanged(state: Int) {
                     when (state) {
                         TelephonyManager.CALL_STATE_RINGING -> {
@@ -137,7 +140,7 @@ class VoiceCommandService : Service() {
                     }
                 }
             }
-            telephonyManager.registerTelephonyCallback(mainExecutor, callback)
+            telephonyManager.registerTelephonyCallback(mainExecutor, telephonyCallback!!)
         } catch (e: SecurityException) {
             Log.e("Voxly", "Failed to register telephony callback: ${e.message}")
         }
@@ -154,10 +157,9 @@ class VoiceCommandService : Service() {
             return
         }
         destroyRecognizer()
-        speechRecognizer = if (SpeechRecognizer.isOnDeviceRecognitionAvailable(this))
-            SpeechRecognizer.createOnDeviceSpeechRecognizer(this)
-        else
-            SpeechRecognizer.createSpeechRecognizer(this)
+        // Always use the default (cloud-capable) recognizer — on-device requires loading a large
+        // ML model which is evicted from memory after 30+ min Doze and causes silent startup hangs.
+        speechRecognizer = SpeechRecognizer.createSpeechRecognizer(this)
         speechRecognizer?.setRecognitionListener(recognitionListener)
         speechRecognizer?.startListening(recognitionIntent)
 
