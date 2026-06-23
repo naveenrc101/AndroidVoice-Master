@@ -28,7 +28,7 @@ class VoiceCommandService : Service() {
     private lateinit var speechRecognizer: SpeechRecognizer
     private lateinit var telecomManager: TelecomManager
     private lateinit var telephonyManager: TelephonyManager
-    private lateinit var textToSpeech: TextToSpeech
+    private var textToSpeech: TextToSpeech? = null
     private var ttsReady = false
 
     private var isPhoneRinging = false
@@ -46,12 +46,6 @@ class VoiceCommandService : Service() {
         super.onCreate()
         telecomManager = getSystemService(Context.TELECOM_SERVICE) as TelecomManager
         telephonyManager = getSystemService(Context.TELEPHONY_SERVICE) as TelephonyManager
-        textToSpeech = TextToSpeech(this) { status ->
-            if (status == TextToSpeech.SUCCESS) {
-                textToSpeech.language = Locale.getDefault()
-                ttsReady = true
-            }
-        }
         setupTelephonyListener()
     }
 
@@ -171,15 +165,30 @@ class VoiceCommandService : Service() {
     }
 
     private fun speakThenAct(text: String, action: () -> Unit) {
-        if (ttsReady) {
-            textToSpeech.setOnUtteranceProgressListener(object : UtteranceProgressListener() {
+        fun doSpeak(tts: TextToSpeech) {
+            tts.setOnUtteranceProgressListener(object : UtteranceProgressListener() {
                 override fun onDone(utteranceId: String?) { action() }
                 override fun onError(utteranceId: String?) { action() }
                 override fun onStart(utteranceId: String?) {}
             })
-            textToSpeech.speak(text, TextToSpeech.QUEUE_FLUSH, null, "VCB_ACTION")
-        } else {
-            action()
+            tts.speak(text, TextToSpeech.QUEUE_FLUSH, null, "VCB_ACTION")
+        }
+
+        when {
+            ttsReady && textToSpeech != null -> doSpeak(textToSpeech!!)
+            textToSpeech == null -> {
+                // Initialize TTS on first use — keeps audio resources free during listening
+                textToSpeech = TextToSpeech(this) { status ->
+                    if (status == TextToSpeech.SUCCESS) {
+                        textToSpeech?.language = Locale.getDefault()
+                        ttsReady = true
+                        doSpeak(textToSpeech!!)
+                    } else {
+                        action()
+                    }
+                }
+            }
+            else -> action() // TTS initializing but not ready yet — act immediately
         }
     }
 
@@ -240,7 +249,7 @@ class VoiceCommandService : Service() {
     override fun onDestroy() {
         isRunning = false
         if (::speechRecognizer.isInitialized) speechRecognizer.destroy()
-        if (::textToSpeech.isInitialized) textToSpeech.shutdown()
+        textToSpeech?.shutdown()
         Log.i("VoiceCallBouncer", "Service shut down. Voice listening stopped.")
         super.onDestroy()
     }
