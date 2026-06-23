@@ -12,6 +12,7 @@ import android.os.IBinder
 import android.os.Looper
 import android.media.AudioManager
 import android.media.ToneGenerator
+import android.os.PowerManager
 import android.speech.RecognitionListener
 import android.speech.RecognizerIntent
 import android.speech.SpeechRecognizer
@@ -27,6 +28,7 @@ class VoiceCommandService : Service() {
     private lateinit var speechRecognizer: SpeechRecognizer
     private lateinit var telecomManager: TelecomManager
     private lateinit var telephonyManager: TelephonyManager
+    private var wakeLock: PowerManager.WakeLock? = null
 
     private var isPhoneRinging = false
     private var recognitionIntent: Intent? = null
@@ -43,6 +45,11 @@ class VoiceCommandService : Service() {
         super.onCreate()
         telecomManager = getSystemService(Context.TELECOM_SERVICE) as TelecomManager
         telephonyManager = getSystemService(Context.TELEPHONY_SERVICE) as TelephonyManager
+        val powerManager = getSystemService(Context.POWER_SERVICE) as PowerManager
+        wakeLock = powerManager.newWakeLock(
+            PowerManager.PARTIAL_WAKE_LOCK,
+            "Voxly::CallWakeLock"
+        )
         setupTelephonyListener()
     }
 
@@ -58,6 +65,10 @@ class VoiceCommandService : Service() {
                     when (state) {
                         TelephonyManager.CALL_STATE_RINGING -> {
                             isPhoneRinging = true
+                            // Acquire wake lock so CPU stays awake when screen is locked
+                            if (wakeLock?.isHeld == false) {
+                                wakeLock?.acquire(60_000L) // max 60s — enough for any ringing call
+                            }
                             Log.d("Voxly", "Incoming call — starting voice recognition")
                             if (::speechRecognizer.isInitialized) {
                                 recognitionIntent?.let { speechRecognizer.startListening(it) }
@@ -66,6 +77,7 @@ class VoiceCommandService : Service() {
                         else -> {
                             if (isPhoneRinging) {
                                 isPhoneRinging = false
+                                if (wakeLock?.isHeld == true) wakeLock?.release()
                                 if (::speechRecognizer.isInitialized) speechRecognizer.stopListening()
                                 Log.d("Voxly", "Call ended — stopping voice recognition")
                             }
@@ -131,6 +143,7 @@ class VoiceCommandService : Service() {
             if (command.contains("answer") || command.contains("accept")) {
                 isPhoneRinging = false
                 speechRecognizer.stopListening()
+                if (wakeLock?.isHeld == true) wakeLock?.release()
                 ToneGenerator(AudioManager.STREAM_NOTIFICATION, 100)
                     .startTone(ToneGenerator.TONE_PROP_ACK, 300)
                 telecomManager.acceptRingingCall()
@@ -138,6 +151,7 @@ class VoiceCommandService : Service() {
             } else if (command.contains("reject") || command.contains("decline")) {
                 isPhoneRinging = false
                 speechRecognizer.stopListening()
+                if (wakeLock?.isHeld == true) wakeLock?.release()
                 ToneGenerator(AudioManager.STREAM_NOTIFICATION, 100)
                     .startTone(ToneGenerator.TONE_PROP_NACK, 300)
                 telecomManager.endCall()
@@ -204,6 +218,7 @@ class VoiceCommandService : Service() {
 
     override fun onDestroy() {
         isRunning = false
+        if (wakeLock?.isHeld == true) wakeLock?.release()
         if (::speechRecognizer.isInitialized) speechRecognizer.destroy()
         Log.i("Voxly", "Service shut down. Voice listening stopped.")
         super.onDestroy()

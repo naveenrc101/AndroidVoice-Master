@@ -26,6 +26,9 @@
     <!-- Allows requesting battery optimization exemption so service survives app close -->
     <uses-permission android:name="android.permission.REQUEST_IGNORE_BATTERY_OPTIMIZATIONS" />
 
+    <!-- Keeps CPU awake when screen is locked so mic can activate on incoming calls -->
+    <uses-permission android:name="android.permission.WAKE_LOCK" />
+
     <application
         android:allowBackup="true"
         android:icon="@mipmap/ic_launcher"
