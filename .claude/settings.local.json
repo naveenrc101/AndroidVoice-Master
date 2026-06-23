@@ -4,7 +4,10 @@
       "Bash(git push:*)",
       "Bash(git remote:*)",
       "Bash(git add:*)",
-      "Bash(git commit:*)"
+      "Bash(git commit:*)",
+      "Bash(python3:*)",
+      "Bash(pip install:*)",
+      "Bash(git pull:*)"
     ]
   }
 }
