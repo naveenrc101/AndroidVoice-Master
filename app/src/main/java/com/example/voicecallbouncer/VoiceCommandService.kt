@@ -20,20 +20,22 @@ import android.util.Log
 import androidx.core.app.NotificationCompat
 import androidx.core.content.ContextCompat
 
-/**
- * VoiceCommandService - Android 16 (API 36) Scoped Background Voice Control Service.
- * Leverages on-device hardware Speech Recognition and BLE audio routing context.
- */
 class VoiceCommandService : Service() {
 
     private lateinit var speechRecognizer: SpeechRecognizer
     private lateinit var telecomManager: TelecomManager
     private lateinit var telephonyManager: TelephonyManager
-    
+
     private var isPhoneRinging = false
     private var recognitionIntent: Intent? = null
     private val NOTIFICATION_ID = 101
     private val CHANNEL_ID = "VoiceBouncerChannel"
+
+    companion object {
+        const val PREFS_NAME = "VoiceBouncerPrefs"
+        const val KEY_SERVICE_ENABLED = "service_enabled"
+        var isRunning = false
+    }
 
     override fun onCreate() {
         super.onCreate()
@@ -167,7 +169,26 @@ class VoiceCommandService : Service() {
             startForeground(NOTIFICATION_ID, notification)
         }
         initializeOfflineSpeechRecognizer()
+        isRunning = true
+        getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE)
+            .edit().putBoolean(KEY_SERVICE_ENABLED, true).apply()
         return START_STICKY
+    }
+
+    override fun onTaskRemoved(rootIntent: Intent?) {
+        // App was swiped from recents — restart service silently
+        val restartIntent = Intent(applicationContext, VoiceCommandService::class.java)
+        val pendingIntent = android.app.PendingIntent.getService(
+            applicationContext, 1, restartIntent,
+            android.app.PendingIntent.FLAG_ONE_SHOT or android.app.PendingIntent.FLAG_IMMUTABLE
+        )
+        val alarmManager = getSystemService(Context.ALARM_SERVICE) as android.app.AlarmManager
+        alarmManager.set(
+            android.app.AlarmManager.ELAPSED_REALTIME,
+            android.os.SystemClock.elapsedRealtime() + 1000,
+            pendingIntent
+        )
+        super.onTaskRemoved(rootIntent)
     }
 
     private fun createNotificationChannel() {
@@ -185,7 +206,8 @@ class VoiceCommandService : Service() {
     override fun onBind(intent: Intent?): IBinder? = null
 
     override fun onDestroy() {
-        speechRecognizer.destroy()
+        isRunning = false
+        if (::speechRecognizer.isInitialized) speechRecognizer.destroy()
         Log.i("VoiceCallBouncer", "Service shut down. Voice listening stopped.")
         super.onDestroy()
     }

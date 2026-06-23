@@ -54,7 +54,13 @@ class MainActivity : ComponentActivity() {
 @Composable
 fun MainWorkspaceScreen(permissions: Array<String>) {
     val context = LocalContext.current
-    var isServiceRunning by remember { mutableStateOf(false) }
+    val prefs = context.getSharedPreferences(VoiceCommandService.PREFS_NAME, Context.MODE_PRIVATE)
+    var isServiceRunning by remember {
+        mutableStateOf(
+            VoiceCommandService.isRunning ||
+            prefs.getBoolean(VoiceCommandService.KEY_SERVICE_ENABLED, false)
+        )
+    }
     var permissionsGranted by remember { mutableStateOf(false) }
 
     // Modern API Activity Result Launcher
@@ -152,6 +158,8 @@ fun MainWorkspaceScreen(permissions: Array<String>) {
 }
 
 private fun toggleForegroundService(context: Context, start: Boolean) {
+    val prefs = context.getSharedPreferences(VoiceCommandService.PREFS_NAME, Context.MODE_PRIVATE)
+    prefs.edit().putBoolean(VoiceCommandService.KEY_SERVICE_ENABLED, start).apply()
     val intent = Intent(context, VoiceCommandService::class.java)
     if (start) {
         context.startForegroundService(intent)
