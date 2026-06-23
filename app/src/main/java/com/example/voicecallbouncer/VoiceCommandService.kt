@@ -10,6 +10,8 @@ import android.os.Bundle
 import android.os.Handler
 import android.os.IBinder
 import android.os.Looper
+import android.media.AudioManager
+import android.media.ToneGenerator
 import android.speech.RecognitionListener
 import android.speech.RecognizerIntent
 import android.speech.SpeechRecognizer
@@ -136,6 +138,8 @@ class VoiceCommandService : Service() {
             if (command.contains("answer") || command.contains("accept")) {
                 isPhoneRinging = false
                 speechRecognizer.stopListening()
+                ToneGenerator(AudioManager.STREAM_NOTIFICATION, 100)
+                    .startTone(ToneGenerator.TONE_PROP_ACK, 300)
                 telecomManager.acceptRingingCall()
                 Log.i("VoiceCallBouncer", "Call accepted via voice command: $command")
             } else if (command.contains("reject") || command.contains("decline")) {
