@@ -45,14 +45,14 @@ You will also see a persistent **Voxly** notification in your status bar — thi
 Once the switch is ON, Voxly runs silently in the background. You do not need to keep the app open.
 
 ### Answering a call
-When your phone rings, say:
-> **"Answer"** or **"Accept"**
+When your phone rings, say any of:
+> **"Answer"**, **"Accept"**, **"Pick up"**, **"Yes"**, **"Yeah"**
 
 You will hear a short confirmation beep and the call will connect.
 
 ### Rejecting a call
-When your phone rings, say:
-> **"Reject"** or **"Decline"**
+When your phone rings, say any of:
+> **"Reject"**, **"Decline"**, **"Ignore"**, **"Busy"**, **"No"**
 
 The call will be rejected.
 

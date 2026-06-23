@@ -47,7 +47,8 @@ class VoiceCommandService : Service() {
         Intent(RecognizerIntent.ACTION_RECOGNIZE_SPEECH).apply {
             putExtra(RecognizerIntent.EXTRA_LANGUAGE_MODEL, RecognizerIntent.LANGUAGE_MODEL_FREE_FORM)
             putExtra(RecognizerIntent.EXTRA_PARTIAL_RESULTS, true)
-            putExtra(RecognizerIntent.EXTRA_PREFER_OFFLINE, true)
+            // Use cloud recognition — significantly more accurate in noisy environments.
+            // On-device is faster but struggles with background noise.
         }
     }
 
@@ -76,7 +77,7 @@ class VoiceCommandService : Service() {
         override fun onPartialResults(partialResults: Bundle?) {
             if (isPhoneRinging) {
                 partialResults?.getStringArrayList(SpeechRecognizer.RESULTS_RECOGNITION)
-                    ?.firstOrNull()?.let { processCommand(it.lowercase()) }
+                    ?.forEach { processCommand(it.lowercase()) }
             }
         }
 
@@ -166,7 +167,9 @@ class VoiceCommandService : Service() {
         if (!isPhoneRinging) return
         try {
             when {
-                command.contains("answer") || command.contains("accept") -> {
+                command.contains("answer") || command.contains("accept") ||
+                command.contains("pick up") || command.contains("pickup") ||
+                command.contains("yeah") || command.contains("yes") -> {
                     isPhoneRinging = false
                     if (wakeLock?.isHeld == true) wakeLock?.release()
                     destroyRecognizer()
@@ -175,7 +178,9 @@ class VoiceCommandService : Service() {
                     telecomManager.acceptRingingCall()
                     Log.i("Voxly", "Call accepted via voice command: $command")
                 }
-                command.contains("reject") || command.contains("decline") -> {
+                command.contains("reject") || command.contains("decline") ||
+                command.contains("ignore") || command.contains("busy") ||
+                command.contains("no") -> {
                     isPhoneRinging = false
                     if (wakeLock?.isHeld == true) wakeLock?.release()
                     destroyRecognizer()
