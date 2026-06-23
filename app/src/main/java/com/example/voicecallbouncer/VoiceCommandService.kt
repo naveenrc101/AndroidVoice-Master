@@ -32,15 +32,10 @@ class VoiceCommandService : Service() {
 
     private var isPhoneRinging = false
     private var retryCount = 0
-    private val MAX_RETRIES = 10
+    private val MAX_RETRIES = 15 // ~15 seconds of retries — covers speech service wake-up from deep idle
 
     private val NOTIFICATION_ID = 101
     private val CHANNEL_ID = "VoxlyChannel"
-
-    // Keep-alive: recreate SpeechRecognizer every 20 minutes so the speech
-    // recognition service binding stays fresh after extended idle periods
-    private val keepAliveHandler = Handler(Looper.getMainLooper())
-    private val KEEP_ALIVE_INTERVAL_MS = 20 * 60 * 1000L // 20 minutes
 
     companion object {
         const val PREFS_NAME = "VoxlyPrefs"
@@ -52,8 +47,6 @@ class VoiceCommandService : Service() {
         Intent(RecognizerIntent.ACTION_RECOGNIZE_SPEECH).apply {
             putExtra(RecognizerIntent.EXTRA_LANGUAGE_MODEL, RecognizerIntent.LANGUAGE_MODEL_FREE_FORM)
             putExtra(RecognizerIntent.EXTRA_PARTIAL_RESULTS, true)
-            // Prefer on-device recognition — cloud speech is restricted from background
-            // services on Android 14+ when the screen is locked or device is in Doze
             putExtra(RecognizerIntent.EXTRA_PREFER_OFFLINE, true)
         }
     }
@@ -63,25 +56,20 @@ class VoiceCommandService : Service() {
             retryCount = 0
             results?.getStringArrayList(SpeechRecognizer.RESULTS_RECOGNITION)
                 ?.forEach { processCommand(it.lowercase()) }
-            if (isPhoneRinging) startListeningOnWarmRecognizer()
+            if (isPhoneRinging) startVoiceRecognition()
         }
 
         override fun onError(error: Int) {
             Log.w("Voxly", "Recognition error: $error — retry $retryCount/$MAX_RETRIES")
             if (!isPhoneRinging || retryCount >= MAX_RETRIES) return
             retryCount++
-            // Shorter delay for busy errors, longer for audio-not-ready errors
             val delay = when (error) {
                 SpeechRecognizer.ERROR_RECOGNIZER_BUSY -> 300L
                 SpeechRecognizer.ERROR_AUDIO -> 1200L
                 else -> 800L
             }
             Handler(Looper.getMainLooper()).postDelayed({
-                if (isPhoneRinging) {
-                    // Recreate recognizer on each retry — avoids ERROR_RECOGNIZER_BUSY
-                    // on Android 14/15 when reusing a stale instance
-                    recreateAndListen()
-                }
+                if (isPhoneRinging) startVoiceRecognition()
             }, delay)
         }
 
@@ -123,11 +111,9 @@ class VoiceCommandService : Service() {
                             if (isPhoneRinging) return
                             isPhoneRinging = true
                             retryCount = 0
-                            keepAliveHandler.removeCallbacksAndMessages(null)
                             if (wakeLock?.isHeld == false) wakeLock?.acquire(60_000L)
                             Log.d("Voxly", "Incoming call — starting voice recognition")
-                            // Use the warm recognizer directly for instant response
-                            startListeningOnWarmRecognizer()
+                            startVoiceRecognition()
                         }
                         else -> {
                             if (isPhoneRinging) {
@@ -136,10 +122,6 @@ class VoiceCommandService : Service() {
                                 if (wakeLock?.isHeld == true) wakeLock?.release()
                                 destroyRecognizer()
                                 Log.d("Voxly", "Call ended — stopped voice recognition")
-                                // Rebuild a warm recognizer after the call and
-                                // schedule the next keep-alive cycle
-                                initWarmRecognizer()
-                                scheduleKeepAlive()
                             }
                         }
                     }
@@ -151,37 +133,16 @@ class VoiceCommandService : Service() {
         }
     }
 
-    /** Creates a SpeechRecognizer and attaches the listener but does NOT start listening.
-     *  Keeps the speech service binding alive so it is immediately usable on an incoming call. */
-    private fun initWarmRecognizer() {
-        if (ContextCompat.checkSelfPermission(this, Manifest.permission.RECORD_AUDIO)
-            != PackageManager.PERMISSION_GRANTED) return
-        destroyRecognizer()
-        speechRecognizer = if (SpeechRecognizer.isOnDeviceRecognitionAvailable(this))
-            SpeechRecognizer.createOnDeviceSpeechRecognizer(this)
-        else
-            SpeechRecognizer.createSpeechRecognizer(this)
-        speechRecognizer?.setRecognitionListener(recognitionListener)
-        Log.d("Voxly", "Warm SpeechRecognizer ready")
-    }
-
-    /** Calls startListening() on the current warm instance.
-     *  Falls back to recreating the recognizer if none exists. */
-    private fun startListeningOnWarmRecognizer() {
+    /** Creates a fresh SpeechRecognizer and starts listening.
+     *  Always creates fresh — avoids ERROR_RECOGNIZER_BUSY on Android 14/15.
+     *  Called on every incoming call and on every error retry. */
+    private fun startVoiceRecognition() {
         if (!isPhoneRinging) return
-        if (speechRecognizer == null) {
-            recreateAndListen()
+        if (ContextCompat.checkSelfPermission(this, Manifest.permission.RECORD_AUDIO)
+            != PackageManager.PERMISSION_GRANTED) {
+            Log.e("Voxly", "RECORD_AUDIO not granted")
             return
         }
-        speechRecognizer?.startListening(recognitionIntent)
-    }
-
-    /** Destroys any existing recognizer and creates a fresh one before listening.
-     *  Used for error recovery to avoid ERROR_RECOGNIZER_BUSY on Android 14/15. */
-    private fun recreateAndListen() {
-        if (!isPhoneRinging) return
-        if (ContextCompat.checkSelfPermission(this, Manifest.permission.RECORD_AUDIO)
-            != PackageManager.PERMISSION_GRANTED) return
         destroyRecognizer()
         speechRecognizer = if (SpeechRecognizer.isOnDeviceRecognitionAvailable(this))
             SpeechRecognizer.createOnDeviceSpeechRecognizer(this)
@@ -189,7 +150,6 @@ class VoiceCommandService : Service() {
             SpeechRecognizer.createSpeechRecognizer(this)
         speechRecognizer?.setRecognitionListener(recognitionListener)
         speechRecognizer?.startListening(recognitionIntent)
-        Log.d("Voxly", "Recreated SpeechRecognizer and started listening")
     }
 
     private fun destroyRecognizer() {
@@ -200,21 +160,6 @@ class VoiceCommandService : Service() {
             Log.w("Voxly", "Error destroying recognizer: ${e.message}")
         }
         speechRecognizer = null
-    }
-
-    /** Schedules periodic SpeechRecognizer refresh every 20 minutes.
-     *  After extended idle, Android suspends the speech service process.
-     *  Recreating the recognizer regularly keeps the binding fresh so it
-     *  is immediately available when a call arrives. */
-    private fun scheduleKeepAlive() {
-        keepAliveHandler.removeCallbacksAndMessages(null)
-        keepAliveHandler.postDelayed({
-            if (!isPhoneRinging && isRunning) {
-                Log.d("Voxly", "Keep-alive: refreshing SpeechRecognizer")
-                initWarmRecognizer()
-                scheduleKeepAlive()
-            }
-        }, KEEP_ALIVE_INTERVAL_MS)
     }
 
     private fun processCommand(command: String) {
@@ -229,8 +174,6 @@ class VoiceCommandService : Service() {
                         .startTone(ToneGenerator.TONE_PROP_ACK, 300)
                     telecomManager.acceptRingingCall()
                     Log.i("Voxly", "Call accepted via voice command: $command")
-                    initWarmRecognizer()
-                    scheduleKeepAlive()
                 }
                 command.contains("reject") || command.contains("decline") -> {
                     isPhoneRinging = false
@@ -240,8 +183,6 @@ class VoiceCommandService : Service() {
                         .startTone(ToneGenerator.TONE_PROP_NACK, 300)
                     telecomManager.endCall()
                     Log.i("Voxly", "Call rejected via voice command: $command")
-                    initWarmRecognizer()
-                    scheduleKeepAlive()
                 }
             }
         } catch (e: SecurityException) {
@@ -268,9 +209,6 @@ class VoiceCommandService : Service() {
             startForeground(NOTIFICATION_ID, notification)
         }
 
-        initWarmRecognizer()
-        scheduleKeepAlive()
-
         isRunning = true
         getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE)
             .edit().putBoolean(KEY_SERVICE_ENABLED, true).apply()
@@ -290,7 +228,6 @@ class VoiceCommandService : Service() {
 
     override fun onDestroy() {
         isRunning = false
-        keepAliveHandler.removeCallbacksAndMessages(null)
         if (wakeLock?.isHeld == true) wakeLock?.release()
         destroyRecognizer()
         Log.i("Voxly", "Service shut down.")
