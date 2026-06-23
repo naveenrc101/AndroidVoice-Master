@@ -53,11 +53,11 @@ class MainActivity : ComponentActivity() {
 
     override fun onResume() {
         super.onResume()
-        // If service should be running but was killed (e.g. after clearing recents),
-        // restart it automatically every time the app comes to foreground
         val prefs = getSharedPreferences(VoiceCommandService.PREFS_NAME, MODE_PRIVATE)
         if (prefs.getBoolean(VoiceCommandService.KEY_SERVICE_ENABLED, false) &&
             !VoiceCommandService.isRunning) {
+            // Stop any stale instance first, then start fresh
+            stopService(Intent(this, VoiceCommandService::class.java))
             startForegroundService(Intent(this, VoiceCommandService::class.java))
         }
     }

@@ -92,6 +92,10 @@ class VoiceCommandService : Service() {
     }
 
     private fun initializeOfflineSpeechRecognizer() {
+        // Destroy any existing recognizer before creating a new one
+        if (::speechRecognizer.isInitialized) {
+            speechRecognizer.destroy()
+        }
         if (SpeechRecognizer.isOnDeviceRecognitionAvailable(this)) {
             speechRecognizer = SpeechRecognizer.createOnDeviceSpeechRecognizer(this)
             Log.i("Voxly", "On-Device Neural Engine initialized for speech processing")
@@ -185,21 +189,6 @@ class VoiceCommandService : Service() {
         getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE)
             .edit().putBoolean(KEY_SERVICE_ENABLED, true).apply()
         return START_STICKY
-    }
-
-    override fun onTaskRemoved(rootIntent: Intent?) {
-        val restartIntent = Intent(applicationContext, VoiceCommandService::class.java)
-        val pendingIntent = android.app.PendingIntent.getService(
-            applicationContext, 1, restartIntent,
-            android.app.PendingIntent.FLAG_ONE_SHOT or android.app.PendingIntent.FLAG_IMMUTABLE
-        )
-        val alarmManager = getSystemService(Context.ALARM_SERVICE) as android.app.AlarmManager
-        alarmManager.set(
-            android.app.AlarmManager.ELAPSED_REALTIME,
-            android.os.SystemClock.elapsedRealtime() + 1000,
-            pendingIntent
-        )
-        super.onTaskRemoved(rootIntent)
     }
 
     private fun createNotificationChannel() {
