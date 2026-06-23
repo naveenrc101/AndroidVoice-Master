@@ -3,7 +3,10 @@ package com.example.voicecallbouncer
 import android.Manifest
 import android.content.Context
 import android.content.Intent
+import android.net.Uri
 import android.os.Bundle
+import android.os.PowerManager
+import android.provider.Settings
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.compose.setContent
@@ -62,12 +65,22 @@ fun MainWorkspaceScreen(permissions: Array<String>) {
         )
     }
     var permissionsGranted by remember { mutableStateOf(false) }
+    val powerManager = context.getSystemService(Context.POWER_SERVICE) as PowerManager
+    var batteryOptimized by remember {
+        mutableStateOf(!powerManager.isIgnoringBatteryOptimizations(context.packageName))
+    }
 
     // Modern API Activity Result Launcher
     val launcher = rememberLauncherForActivityResult(
         ActivityResultContracts.RequestMultiplePermissions()
     ) { grantResultMap ->
         permissionsGranted = grantResultMap.values.all { it }
+    }
+
+    val batteryLauncher = rememberLauncherForActivityResult(
+        ActivityResultContracts.StartActivityForResult()
+    ) {
+        batteryOptimized = !powerManager.isIgnoringBatteryOptimizations(context.packageName)
     }
 
     // Trigger permission requests right on load or with manual action
@@ -136,7 +149,42 @@ fun MainWorkspaceScreen(permissions: Array<String>) {
             }
         }
 
-        Spacer(modifier = Modifier.height(24.dp))
+        Spacer(modifier = Modifier.height(12.dp))
+
+        if (batteryOptimized) {
+            Card(
+                modifier = Modifier.fillMaxWidth(),
+                colors = CardDefaults.cardColors(containerColor = Color(0xFF3B1A1A))
+            ) {
+                Column(modifier = Modifier.padding(16.dp)) {
+                    Text(
+                        text = "Battery Optimization is ON",
+                        fontWeight = FontWeight.Bold,
+                        color = Color(0xFFFF6B6B),
+                        fontSize = 13.sp
+                    )
+                    Spacer(modifier = Modifier.height(4.dp))
+                    Text(
+                        text = "The service will stop when you close the app. Disable battery optimization to keep it running silently.",
+                        fontSize = 11.sp,
+                        color = Color.LightGray
+                    )
+                    Spacer(modifier = Modifier.height(10.dp))
+                    Button(
+                        onClick = {
+                            val intent = Intent(Settings.ACTION_REQUEST_IGNORE_BATTERY_OPTIMIZATIONS)
+                            intent.data = Uri.parse("package:${context.packageName}")
+                            batteryLauncher.launch(intent)
+                        },
+                        colors = ButtonDefaults.buttonColors(containerColor = Color(0xFFFF6B6B))
+                    ) {
+                        Text("Fix Now", color = Color.White, fontSize = 12.sp)
+                    }
+                }
+            }
+        }
+
+        Spacer(modifier = Modifier.height(12.dp))
 
         // System Monospace Feed console inside screen boundaries
         Box(
