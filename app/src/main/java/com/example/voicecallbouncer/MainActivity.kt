@@ -29,18 +29,16 @@ import androidx.compose.ui.unit.sp
  */
 class MainActivity : ComponentActivity() {
 
+    private val requiredPermissions = arrayOf(
+        Manifest.permission.RECORD_AUDIO,
+        Manifest.permission.READ_PHONE_STATE,
+        Manifest.permission.ANSWER_PHONE_CALLS,
+        Manifest.permission.BLUETOOTH_CONNECT,
+        Manifest.permission.FOREGROUND_SERVICE_MICROPHONE
+    )
+
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
-        
-        // Comprehensive Security Sandbox-compliant Permission array
-        val requiredPermissions = arrayOf(
-            Manifest.permission.RECORD_AUDIO,
-            Manifest.permission.READ_PHONE_STATE,
-            Manifest.permission.ANSWER_PHONE_CALLS,
-            Manifest.permission.BLUETOOTH_CONNECT,
-            Manifest.permission.FOREGROUND_SERVICE_MICROPHONE
-        )
-
         setContent {
             VoiceBouncerDarkTheme {
                 Surface(
@@ -50,6 +48,17 @@ class MainActivity : ComponentActivity() {
                     MainWorkspaceScreen(requiredPermissions)
                 }
             }
+        }
+    }
+
+    override fun onResume() {
+        super.onResume()
+        // If service should be running but was killed (e.g. after clearing recents),
+        // restart it automatically every time the app comes to foreground
+        val prefs = getSharedPreferences(VoiceCommandService.PREFS_NAME, MODE_PRIVATE)
+        if (prefs.getBoolean(VoiceCommandService.KEY_SERVICE_ENABLED, false) &&
+            !VoiceCommandService.isRunning) {
+            startForegroundService(Intent(this, VoiceCommandService::class.java))
         }
     }
 }
