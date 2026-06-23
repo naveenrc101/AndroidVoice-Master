@@ -105,14 +105,14 @@ fun MainWorkspaceScreen(permissions: Array<String>) {
         verticalArrangement = Arrangement.Center
     ) {
         Text(
-            text = "VoiceCallBouncer",
+            text = "Voxly",
             fontSize = 30.sp,
             fontWeight = FontWeight.ExtraBold,
             color = Color(0xFF22D3EE) // Cyan accent
         )
         Spacer(modifier = Modifier.height(4.dp))
         Text(
-            text = "API 36 On-Device Speech Network Manager",
+            text = "Voice-powered call control",
             fontSize = 11.sp,
             color = Color.LightGray,
             fontFamily = FontFamily.Monospace

@@ -31,10 +31,10 @@ class VoiceCommandService : Service() {
     private var isPhoneRinging = false
     private var recognitionIntent: Intent? = null
     private val NOTIFICATION_ID = 101
-    private val CHANNEL_ID = "VoiceBouncerChannel"
+    private val CHANNEL_ID = "VoxlyChannel"
 
     companion object {
-        const val PREFS_NAME = "VoiceBouncerPrefs"
+        const val PREFS_NAME = "VoxlyPrefs"
         const val KEY_SERVICE_ENABLED = "service_enabled"
         var isRunning = false
     }
@@ -49,7 +49,7 @@ class VoiceCommandService : Service() {
     private fun setupTelephonyListener() {
         if (ContextCompat.checkSelfPermission(this, Manifest.permission.READ_PHONE_STATE)
             != PackageManager.PERMISSION_GRANTED) {
-            Log.e("VoiceCallBouncer", "READ_PHONE_STATE not granted — call detection disabled")
+            Log.e("Voxly", "READ_PHONE_STATE not granted — call detection disabled")
             return
         }
         try {
@@ -58,7 +58,7 @@ class VoiceCommandService : Service() {
                     when (state) {
                         TelephonyManager.CALL_STATE_RINGING -> {
                             isPhoneRinging = true
-                            Log.d("VoiceCallBouncer", "Incoming call — starting voice recognition")
+                            Log.d("Voxly", "Incoming call — starting voice recognition")
                             if (::speechRecognizer.isInitialized) {
                                 recognitionIntent?.let { speechRecognizer.startListening(it) }
                             }
@@ -67,7 +67,7 @@ class VoiceCommandService : Service() {
                             if (isPhoneRinging) {
                                 isPhoneRinging = false
                                 if (::speechRecognizer.isInitialized) speechRecognizer.stopListening()
-                                Log.d("VoiceCallBouncer", "Call ended — stopping voice recognition")
+                                Log.d("Voxly", "Call ended — stopping voice recognition")
                             }
                         }
                     }
@@ -75,17 +75,17 @@ class VoiceCommandService : Service() {
             }
             telephonyManager.registerTelephonyCallback(mainExecutor, callback)
         } catch (e: SecurityException) {
-            Log.e("VoiceCallBouncer", "Failed to register telephony callback: ${e.message}")
+            Log.e("Voxly", "Failed to register telephony callback: ${e.message}")
         }
     }
 
     private fun initializeOfflineSpeechRecognizer() {
         if (SpeechRecognizer.isOnDeviceRecognitionAvailable(this)) {
             speechRecognizer = SpeechRecognizer.createOnDeviceSpeechRecognizer(this)
-            Log.i("VoiceCallBouncer", "On-Device Neural Engine initialized for speech processing")
+            Log.i("Voxly", "On-Device Neural Engine initialized for speech processing")
         } else {
             speechRecognizer = SpeechRecognizer.createSpeechRecognizer(this)
-            Log.w("VoiceCallBouncer", "Standard Speech Engine initiated (On-Device sandbox unavailable)")
+            Log.w("Voxly", "Standard Speech Engine initiated (On-Device sandbox unavailable)")
         }
 
         recognitionIntent = Intent(RecognizerIntent.ACTION_RECOGNIZE_SPEECH).apply {
@@ -101,7 +101,7 @@ class VoiceCommandService : Service() {
             }
 
             override fun onError(error: Int) {
-                Log.w("VoiceCallBouncer", "Recognition error code: $error")
+                Log.w("Voxly", "Recognition error code: $error")
                 if (isPhoneRinging) {
                     Handler(Looper.getMainLooper()).postDelayed({
                         if (isPhoneRinging) speechRecognizer.startListening(recognitionIntent!!)
@@ -134,26 +134,26 @@ class VoiceCommandService : Service() {
                 ToneGenerator(AudioManager.STREAM_NOTIFICATION, 100)
                     .startTone(ToneGenerator.TONE_PROP_ACK, 300)
                 telecomManager.acceptRingingCall()
-                Log.i("VoiceCallBouncer", "Call accepted via voice command: $command")
+                Log.i("Voxly", "Call accepted via voice command: $command")
             } else if (command.contains("reject") || command.contains("decline")) {
                 isPhoneRinging = false
                 speechRecognizer.stopListening()
                 ToneGenerator(AudioManager.STREAM_NOTIFICATION, 100)
                     .startTone(ToneGenerator.TONE_PROP_NACK, 300)
                 telecomManager.endCall()
-                Log.i("VoiceCallBouncer", "Call rejected via voice command: $command")
+                Log.i("Voxly", "Call rejected via voice command: $command")
             }
         } catch (e: SecurityException) {
-            Log.e("VoiceCallBouncer", "Permission denied — ANSWER_PHONE_CALLS not granted: ${e.message}")
+            Log.e("Voxly", "Permission denied — ANSWER_PHONE_CALLS not granted: ${e.message}")
         } catch (e: Exception) {
-            Log.e("VoiceCallBouncer", "Failed to handle call command: ${e.message}")
+            Log.e("Voxly", "Failed to handle call command: ${e.message}")
         }
     }
 
     override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
         createNotificationChannel()
         val notification = NotificationCompat.Builder(this, CHANNEL_ID)
-            .setContentTitle("VoiceCallBouncer Active")
+            .setContentTitle("Voxly")
             .setContentText("Ready — will listen when a call arrives")
             .setSmallIcon(android.R.drawable.ic_btn_speak_now)
             .setOngoing(true)
@@ -205,7 +205,7 @@ class VoiceCommandService : Service() {
     override fun onDestroy() {
         isRunning = false
         if (::speechRecognizer.isInitialized) speechRecognizer.destroy()
-        Log.i("VoiceCallBouncer", "Service shut down. Voice listening stopped.")
+        Log.i("Voxly", "Service shut down. Voice listening stopped.")
         super.onDestroy()
     }
 }
