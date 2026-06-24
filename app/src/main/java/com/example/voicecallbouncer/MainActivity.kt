@@ -2,7 +2,9 @@ package com.example.voicecallbouncer
 
 import android.Manifest
 import android.content.Context
+import android.content.pm.PackageManager
 import android.os.Build
+import androidx.core.content.ContextCompat
 import android.content.Intent
 import android.net.Uri
 import android.os.Bundle
@@ -80,7 +82,24 @@ fun MainWorkspaceScreen(permissions: Array<String>) {
             prefs.getBoolean(VoiceCommandService.KEY_SERVICE_ENABLED, false)
         )
     }
-    var permissionsGranted by remember { mutableStateOf(false) }
+    // Only these three are required for the switch to function.
+    // BLUETOOTH_CONNECT and POST_NOTIFICATIONS are requested but must not block core usage.
+    val corePermissions = remember {
+        listOf(
+            Manifest.permission.RECORD_AUDIO,
+            Manifest.permission.READ_PHONE_STATE,
+            Manifest.permission.ANSWER_PHONE_CALLS
+        )
+    }
+    // Initialize from actual current state — not from async callback — so the switch works
+    // immediately on re-open if permissions were already granted in a previous session.
+    var permissionsGranted by remember {
+        mutableStateOf(
+            corePermissions.all {
+                ContextCompat.checkSelfPermission(context, it) == PackageManager.PERMISSION_GRANTED
+            }
+        )
+    }
     val powerManager = context.getSystemService(Context.POWER_SERVICE) as PowerManager
     var batteryOptimized by remember {
         mutableStateOf(!powerManager.isIgnoringBatteryOptimizations(context.packageName))
@@ -89,8 +108,12 @@ fun MainWorkspaceScreen(permissions: Array<String>) {
     // Modern API Activity Result Launcher
     val launcher = rememberLauncherForActivityResult(
         ActivityResultContracts.RequestMultiplePermissions()
-    ) { grantResultMap ->
-        permissionsGranted = grantResultMap.values.all { it }
+    ) {
+        // Re-check actual grant state — grantResultMap can return false for permissions
+        // that don't exist on the current API level (e.g. POST_NOTIFICATIONS on API 32).
+        permissionsGranted = corePermissions.all {
+            ContextCompat.checkSelfPermission(context, it) == PackageManager.PERMISSION_GRANTED
+        }
     }
 
     val batteryLauncher = rememberLauncherForActivityResult(
