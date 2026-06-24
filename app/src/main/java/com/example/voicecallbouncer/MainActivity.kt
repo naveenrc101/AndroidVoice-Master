@@ -2,6 +2,7 @@ package com.example.voicecallbouncer
 
 import android.Manifest
 import android.content.Context
+import android.os.Build
 import android.content.Intent
 import android.net.Uri
 import android.os.Bundle
@@ -29,13 +30,19 @@ import androidx.compose.ui.unit.sp
  */
 class MainActivity : ComponentActivity() {
 
-    private val requiredPermissions = arrayOf(
-        Manifest.permission.RECORD_AUDIO,
-        Manifest.permission.READ_PHONE_STATE,
-        Manifest.permission.ANSWER_PHONE_CALLS,
-        Manifest.permission.BLUETOOTH_CONNECT,
-        Manifest.permission.FOREGROUND_SERVICE_MICROPHONE
-    )
+    private val requiredPermissions = buildList {
+        add(Manifest.permission.RECORD_AUDIO)
+        add(Manifest.permission.READ_PHONE_STATE)
+        add(Manifest.permission.ANSWER_PHONE_CALLS)
+        add(Manifest.permission.BLUETOOTH_CONNECT)
+        // POST_NOTIFICATIONS became a runtime permission in API 33 (Android 13)
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
+            add(Manifest.permission.POST_NOTIFICATIONS)
+        }
+        // FOREGROUND_SERVICE_MICROPHONE is a normal permission (auto-granted via manifest).
+        // Requesting it at runtime returns false on API 33 and below because it didn't exist
+        // until API 34 — which blocked the switch from turning on on Android 13.
+    }.toTypedArray()
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
