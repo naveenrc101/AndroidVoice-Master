@@ -56,6 +56,28 @@
             android:stopWithTask="false"
             android:foregroundServiceType="microphone" />
 
+        <!--
+            Companion InCallService — Android binds this when any call is active.
+            Being registered as an InCallService gives the OS permission to share
+            the microphone with this app during a phone call, which is not possible
+            from a regular foreground service.
+            The user must enable Voxly as a calling companion once in system settings.
+        -->
+        <service
+            android:name=".VoxlyInCallService"
+            android:permission="android.permission.BIND_INCALL_SERVICE"
+            android:exported="true">
+            <meta-data
+                android:name="android.telecom.IN_CALL_SERVICE_UI"
+                android:value="false" />
+            <meta-data
+                android:name="android.telecom.IN_CALL_SERVICE_RINGING"
+                android:value="false" />
+            <intent-filter>
+                <action android:name="android.telecom.InCallService" />
+            </intent-filter>
+        </service>
+
         <receiver
             android:name=".BootReceiver"
             android:enabled="true"

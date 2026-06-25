@@ -32,7 +32,6 @@ class VoiceCommandService : Service() {
     private var wakeLock: PowerManager.WakeLock? = null
 
     private var isPhoneRinging = false
-    private var isCallActive = false  // true while a call is connected (CALL_STATE_OFFHOOK)
     private var retryCount = 0
     private val MAX_RETRIES = 15 // ~15 seconds of retries — covers speech service wake-up from deep idle
     // Held as a member so the GC cannot collect it after setupTelephonyListener() returns.
@@ -67,13 +66,13 @@ class VoiceCommandService : Service() {
             retryCount = 0
             results?.getStringArrayList(SpeechRecognizer.RESULTS_RECOGNITION)
                 ?.forEach { processCommand(it.lowercase()) }
-            if (isPhoneRinging || isCallActive) startVoiceRecognition()
+            if (isPhoneRinging) startVoiceRecognition()
         }
 
         override fun onError(error: Int) {
             timeoutHandler.removeCallbacksAndMessages(null)
             Log.w("Voxly", "Recognition error: $error — retry $retryCount/$MAX_RETRIES")
-            if ((!isPhoneRinging && !isCallActive) || retryCount >= MAX_RETRIES) return
+            if (!isPhoneRinging || retryCount >= MAX_RETRIES) return
             retryCount++
             val delay = when (error) {
                 SpeechRecognizer.ERROR_RECOGNIZER_BUSY -> 300L
@@ -81,12 +80,12 @@ class VoiceCommandService : Service() {
                 else -> 800L
             }
             Handler(Looper.getMainLooper()).postDelayed({
-                if (isPhoneRinging || isCallActive) startVoiceRecognition()
+                if (isPhoneRinging) startVoiceRecognition()
             }, delay)
         }
 
         override fun onPartialResults(partialResults: Bundle?) {
-            if (isPhoneRinging || isCallActive) {
+            if (isPhoneRinging) {
                 partialResults?.getStringArrayList(SpeechRecognizer.RESULTS_RECOGNITION)
                     ?.forEach { processCommand(it.lowercase()) }
             }
@@ -134,15 +133,11 @@ class VoiceCommandService : Service() {
                             startVoiceRecognition()
                         }
                         TelephonyManager.CALL_STATE_OFFHOOK -> {
-                            // Call connected — switch from ringing mode to active-call mode
+                            // Call connected — VoxlyInCallService takes over from here.
                             isPhoneRinging = false
-                            if (!isCallActive) {
-                                isCallActive = true
-                                retryCount = 0
-                                if (wakeLock?.isHeld == false) wakeLock?.acquire(2 * 60 * 60 * 1000L)
-                                Log.d("Voxly", "Call connected — listening for 'Voxly end'")
-                                startVoiceRecognition()
-                            }
+                            retryCount = 0
+                            if (wakeLock?.isHeld == true) wakeLock?.release()
+                            destroyRecognizer()
                         }
                         TelephonyManager.CALL_STATE_IDLE -> {
                             isPhoneRinging = false
@@ -165,7 +160,7 @@ class VoiceCommandService : Service() {
      *  Always creates fresh — avoids ERROR_RECOGNIZER_BUSY on Android 14/15.
      *  Called on every incoming call and on every error retry. */
     private fun startVoiceRecognition() {
-        if (!isPhoneRinging && !isCallActive) return
+        if (!isPhoneRinging) return
         if (ContextCompat.checkSelfPermission(this, Manifest.permission.RECORD_AUDIO)
             != PackageManager.PERMISSION_GRANTED) {
             Log.e("Voxly", "RECORD_AUDIO not granted")
@@ -185,7 +180,7 @@ class VoiceCommandService : Service() {
         // the speech service didn't respond (common after extended Doze idle). Retry.
         timeoutHandler.removeCallbacksAndMessages(null)
         timeoutHandler.postDelayed({
-            if ((isPhoneRinging || isCallActive) && retryCount < MAX_RETRIES) {
+            if (isPhoneRinging && retryCount < MAX_RETRIES) {
                 Log.w("Voxly", "Recognition timeout — no response from service, retrying ($retryCount/$MAX_RETRIES)")
                 retryCount++
                 startVoiceRecognition()
@@ -208,43 +203,30 @@ class VoiceCommandService : Service() {
     }
 
     private fun processCommand(command: String) {
-        if (!isPhoneRinging && !isCallActive) return
+        if (!isPhoneRinging) return
         try {
-            if (isPhoneRinging) {
-                when {
-                    command.contains("answer") || command.contains("accept") ||
-                    command.contains("pick up") || command.contains("pickup") ||
-                    command.contains("yeah") || command.contains("yes") -> {
-                        isPhoneRinging = false
-                        if (wakeLock?.isHeld == true) wakeLock?.release()
-                        destroyRecognizer()
-                        ToneGenerator(AudioManager.STREAM_NOTIFICATION, 100)
-                            .startTone(ToneGenerator.TONE_PROP_ACK, 300)
-                        telecomManager.acceptRingingCall()
-                        Log.i("Voxly", "Call accepted via voice command: $command")
-                    }
-                    command.contains("reject") || command.contains("decline") ||
-                    command.contains("ignore") || command.contains("busy") ||
-                    command.contains("no") -> {
-                        isPhoneRinging = false
-                        if (wakeLock?.isHeld == true) wakeLock?.release()
-                        destroyRecognizer()
-                        ToneGenerator(AudioManager.STREAM_NOTIFICATION, 100)
-                            .startTone(ToneGenerator.TONE_PROP_NACK, 300)
-                        telecomManager.endCall()
-                        Log.i("Voxly", "Call rejected via voice command: $command")
-                    }
+            when {
+                command.contains("answer") || command.contains("accept") ||
+                command.contains("pick up") || command.contains("pickup") ||
+                command.contains("yeah") || command.contains("yes") -> {
+                    isPhoneRinging = false
+                    if (wakeLock?.isHeld == true) wakeLock?.release()
+                    destroyRecognizer()
+                    ToneGenerator(AudioManager.STREAM_NOTIFICATION, 100)
+                        .startTone(ToneGenerator.TONE_PROP_ACK, 300)
+                    telecomManager.acceptRingingCall()
+                    Log.i("Voxly", "Call accepted via voice command: $command")
                 }
-            } else if (isCallActive) {
-                if ((command.contains("voxly") && command.contains("end")) ||
-                    command.contains("end call") || command.contains("hang up")) {
-                    isCallActive = false
+                command.contains("reject") || command.contains("decline") ||
+                command.contains("ignore") || command.contains("busy") ||
+                command.contains("no") -> {
+                    isPhoneRinging = false
                     if (wakeLock?.isHeld == true) wakeLock?.release()
                     destroyRecognizer()
                     ToneGenerator(AudioManager.STREAM_NOTIFICATION, 100)
                         .startTone(ToneGenerator.TONE_PROP_NACK, 300)
                     telecomManager.endCall()
-                    Log.i("Voxly", "Call ended via voice command: $command")
+                    Log.i("Voxly", "Call rejected via voice command: $command")
                 }
             }
         } catch (e: SecurityException) {
@@ -321,7 +303,6 @@ class VoiceCommandService : Service() {
     override fun onDestroy() {
         isRunning = false
         isPhoneRinging = false
-        isCallActive = false
         if (wakeLock?.isHeld == true) wakeLock?.release()
         destroyRecognizer()
         Log.i("Voxly", "Service shut down.")
