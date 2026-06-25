@@ -141,7 +141,6 @@ class VoiceCommandService : Service() {
                         }
                         TelephonyManager.CALL_STATE_IDLE -> {
                             isPhoneRinging = false
-                            isCallActive = false
                             retryCount = 0
                             if (wakeLock?.isHeld == true) wakeLock?.release()
                             destroyRecognizer()
