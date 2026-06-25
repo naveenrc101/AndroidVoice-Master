@@ -57,12 +57,12 @@ When your phone rings, say any of:
 The call will be rejected.
 
 ### Ending an active call
-Once a call is connected, say:
-> **"Voxly end"**
+Once a call is connected, say any of:
+> **"Voxly end"**, **"End call"**, **"Hang up"**
 
 You will hear a short beep and the call will end.
 
-The phrase requires the "Voxly" prefix so that saying "end" naturally during conversation does not accidentally hang up your call.
+The "Voxly end" phrase uses the app name as a prefix so that saying "end" naturally in conversation does not accidentally hang up your call. "End call" and "Hang up" are also accepted as they are unlikely to be said during normal conversation.
 
 ---
 

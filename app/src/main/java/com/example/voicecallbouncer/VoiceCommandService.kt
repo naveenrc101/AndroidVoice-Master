@@ -28,6 +28,7 @@ class VoiceCommandService : Service() {
     private var speechRecognizer: SpeechRecognizer? = null
     private lateinit var telecomManager: TelecomManager
     private lateinit var telephonyManager: TelephonyManager
+    private lateinit var audioManager: AudioManager
     private var wakeLock: PowerManager.WakeLock? = null
 
     private var isPhoneRinging = false
@@ -94,6 +95,8 @@ class VoiceCommandService : Service() {
         override fun onReadyForSpeech(params: Bundle?) {
             retryCount = 0
             timeoutHandler.removeCallbacksAndMessages(null)
+            // Recognition started successfully — safe to restore system sounds now.
+            audioManager.adjustStreamVolume(AudioManager.STREAM_SYSTEM, AudioManager.ADJUST_UNMUTE, 0)
         }
         override fun onBeginningOfSpeech() {}
         override fun onRmsChanged(rmsdB: Float) {}
@@ -106,6 +109,7 @@ class VoiceCommandService : Service() {
         super.onCreate()
         telecomManager = getSystemService(Context.TELECOM_SERVICE) as TelecomManager
         telephonyManager = getSystemService(Context.TELEPHONY_SERVICE) as TelephonyManager
+        audioManager = getSystemService(Context.AUDIO_SERVICE) as AudioManager
         val powerManager = getSystemService(Context.POWER_SERVICE) as PowerManager
         wakeLock = powerManager.newWakeLock(PowerManager.PARTIAL_WAKE_LOCK, "Voxly::CallWakeLock")
         setupTelephonyListener()
@@ -172,6 +176,9 @@ class VoiceCommandService : Service() {
         // ML model which is evicted from memory after 30+ min Doze and causes silent startup hangs.
         speechRecognizer = SpeechRecognizer.createSpeechRecognizer(this)
         speechRecognizer?.setRecognitionListener(recognitionListener)
+        // Mute system stream to suppress the recognition "ding" sound that plays on every
+        // startListening() call — audible through the earpiece during active calls.
+        audioManager.adjustStreamVolume(AudioManager.STREAM_SYSTEM, AudioManager.ADJUST_MUTE, 0)
         speechRecognizer?.startListening(recognitionIntent)
 
         // Guard against silent failure — if onReadyForSpeech doesn't fire within 3s,
@@ -188,6 +195,9 @@ class VoiceCommandService : Service() {
 
     private fun destroyRecognizer() {
         timeoutHandler.removeCallbacksAndMessages(null)
+        // Always restore system sounds — guards against the recognizer being destroyed
+        // before onReadyForSpeech fires (e.g. on error or call end while muted).
+        audioManager.adjustStreamVolume(AudioManager.STREAM_SYSTEM, AudioManager.ADJUST_UNMUTE, 0)
         try {
             speechRecognizer?.stopListening()
             speechRecognizer?.destroy()
@@ -226,7 +236,8 @@ class VoiceCommandService : Service() {
                     }
                 }
             } else if (isCallActive) {
-                if (command.contains("voxly end")) {
+                if ((command.contains("voxly") && command.contains("end")) ||
+                    command.contains("end call") || command.contains("hang up")) {
                     isCallActive = false
                     if (wakeLock?.isHeld == true) wakeLock?.release()
                     destroyRecognizer()
