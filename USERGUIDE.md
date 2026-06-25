@@ -56,6 +56,14 @@ When your phone rings, say any of:
 
 The call will be rejected.
 
+### Ending an active call
+Once a call is connected, say:
+> **"Voxly end"**
+
+You will hear a short beep and the call will end.
+
+The phrase requires the "Voxly" prefix so that saying "end" naturally during conversation does not accidentally hang up your call.
+
 ---
 
 ## Turning Voxly off
