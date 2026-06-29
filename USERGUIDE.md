@@ -27,18 +27,7 @@ When you open Voxly for the first time, it will ask for the following permission
 
 Tap **Allow** on each prompt.
 
-### 3. Enable Voxly as a calling companion
-This is a one-time step required for the "end call" voice command to work.
-
-1. Open your phone's **Settings**
-2. Go to **Apps → Default Apps → Calling accounts** (exact path varies by device — on Samsung it may be under **Phone app settings**)
-3. Find **Calling companion apps** and enable **Voxly**
-
-Once enabled, Android shares microphone access with Voxly during active calls so it can hear your "end call" command. Without this, the end-call feature is not available.
-
-> **Note:** This does not replace your default phone app. Calls still work exactly as before — Voxly simply runs alongside.
-
-### 4. Disable battery optimization
+### 3. Disable battery optimization
 If a red warning card appears saying **"Battery Optimization is ON"**, tap **Fix Now** and select **Allow** in the system dialog.
 
 This is important — without it, the app may stop working after you close it.
@@ -66,14 +55,6 @@ When your phone rings, say any of:
 > **"Reject"**, **"Decline"**, **"Ignore"**, **"Busy"**, **"No"**
 
 The call will be rejected.
-
-### Ending an active call
-Once a call is connected, say any of:
-> **"Voxly end"**, **"End call"**, **"Hang up"**
-
-You will hear a short beep and the call will end.
-
-The "Voxly end" phrase uses the app name as a prefix so that saying "end" naturally in conversation does not accidentally hang up your call. "End call" and "Hang up" are also accepted as they are unlikely to be said during normal conversation.
 
 ---
 
