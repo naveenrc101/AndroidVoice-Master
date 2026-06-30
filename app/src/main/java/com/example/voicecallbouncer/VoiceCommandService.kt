@@ -38,6 +38,11 @@ class VoiceCommandService : Service() {
     // Held as a member so the GC cannot collect it after setupTelephonyListener() returns.
     // A collected callback silently stops receiving CALL_STATE_RINGING after 30+ min idle.
     private var telephonyCallback: TelephonyCallback? = null
+    // Set when user says "answer" and no headset is detected — consumed in OFFHOOK handler
+    // once audio mode is MODE_IN_CALL and setCommunicationDevice works correctly.
+    private var pendingSpeaker = false
+    // Tracks whether we muted STREAM_SYSTEM so we never double-mute or leave it muted on exit.
+    private var systemStreamMuted = false
 
     // Detects silent failures: if onReadyForSpeech hasn't fired within 3s of startListening(),
     // the speech service didn't respond (common after 30+ min idle). Triggers a retry.
@@ -95,8 +100,6 @@ class VoiceCommandService : Service() {
         override fun onReadyForSpeech(params: Bundle?) {
             retryCount = 0
             timeoutHandler.removeCallbacksAndMessages(null)
-            // Recognition started successfully — safe to restore system sounds now.
-            audioManager.adjustStreamVolume(AudioManager.STREAM_SYSTEM, AudioManager.ADJUST_UNMUTE, 0)
         }
         override fun onBeginningOfSpeech() {}
         override fun onRmsChanged(rmsdB: Float) {}
@@ -130,20 +133,28 @@ class VoiceCommandService : Service() {
                             isPhoneRinging = true
                             retryCount = 0
                             if (wakeLock?.isHeld == false) wakeLock?.acquire(60_000L)
+                            // Mute once for the whole ringing session so retries don't produce dings.
+                            muteSystemStream()
                             Log.d("Voxly", "Incoming call — starting voice recognition")
                             startVoiceRecognition()
                         }
                         TelephonyManager.CALL_STATE_OFFHOOK -> {
-                            // Call connected — VoxlyInCallService takes over from here.
                             isPhoneRinging = false
                             retryCount = 0
                             if (wakeLock?.isHeld == true) wakeLock?.release()
+                            unmuteSystemStream()
                             destroyRecognizer()
+                            if (pendingSpeaker) {
+                                pendingSpeaker = false
+                                enableSpeakerphone()
+                            }
                         }
                         TelephonyManager.CALL_STATE_IDLE -> {
                             isPhoneRinging = false
                             retryCount = 0
+                            pendingSpeaker = false
                             if (wakeLock?.isHeld == true) wakeLock?.release()
+                            unmuteSystemStream()
                             destroyRecognizer()
                             Log.d("Voxly", "Call ended — stopped voice recognition")
                         }
@@ -171,9 +182,6 @@ class VoiceCommandService : Service() {
         // ML model which is evicted from memory after 30+ min Doze and causes silent startup hangs.
         speechRecognizer = SpeechRecognizer.createSpeechRecognizer(this)
         speechRecognizer?.setRecognitionListener(recognitionListener)
-        // Mute system stream to suppress the recognition "ding" sound that plays on every
-        // startListening() call — audible through the earpiece during active calls.
-        audioManager.adjustStreamVolume(AudioManager.STREAM_SYSTEM, AudioManager.ADJUST_MUTE, 0)
         speechRecognizer?.startListening(recognitionIntent)
 
         // Guard against silent failure — if onReadyForSpeech doesn't fire within 3s,
@@ -190,9 +198,6 @@ class VoiceCommandService : Service() {
 
     private fun destroyRecognizer() {
         timeoutHandler.removeCallbacksAndMessages(null)
-        // Always restore system sounds — guards against the recognizer being destroyed
-        // before onReadyForSpeech fires (e.g. on error or call end while muted).
-        audioManager.adjustStreamVolume(AudioManager.STREAM_SYSTEM, AudioManager.ADJUST_UNMUTE, 0)
         try {
             speechRecognizer?.stopListening()
             speechRecognizer?.destroy()
@@ -200,6 +205,20 @@ class VoiceCommandService : Service() {
             Log.w("Voxly", "Error destroying recognizer: ${e.message}")
         }
         speechRecognizer = null
+    }
+
+    private fun muteSystemStream() {
+        if (!systemStreamMuted) {
+            audioManager.adjustStreamVolume(AudioManager.STREAM_SYSTEM, AudioManager.ADJUST_MUTE, 0)
+            systemStreamMuted = true
+        }
+    }
+
+    private fun unmuteSystemStream() {
+        if (systemStreamMuted) {
+            audioManager.adjustStreamVolume(AudioManager.STREAM_SYSTEM, AudioManager.ADJUST_UNMUTE, 0)
+            systemStreamMuted = false
+        }
     }
 
     private fun isHeadsetConnected(): Boolean {
@@ -216,15 +235,13 @@ class VoiceCommandService : Service() {
 
     @Suppress("DEPRECATION")
     private fun enableSpeakerphone() {
-        Handler(Looper.getMainLooper()).postDelayed({
-            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {
-                audioManager.getDevices(AudioManager.GET_DEVICES_OUTPUTS)
-                    .firstOrNull { it.type == AudioDeviceInfo.TYPE_BUILTIN_SPEAKER }
-                    ?.let { audioManager.setCommunicationDevice(it) }
-            } else {
-                audioManager.isSpeakerphoneOn = true
-            }
-        }, 500L)
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {
+            audioManager.getDevices(AudioManager.GET_DEVICES_OUTPUTS)
+                .firstOrNull { it.type == AudioDeviceInfo.TYPE_BUILTIN_SPEAKER }
+                ?.let { audioManager.setCommunicationDevice(it) }
+        } else {
+            audioManager.isSpeakerphoneOn = true
+        }
     }
 
     private fun processCommand(command: String) {
@@ -235,12 +252,13 @@ class VoiceCommandService : Service() {
                 command.contains("pick up") || command.contains("pickup") ||
                 command.contains("yeah") || command.contains("yes") -> {
                     isPhoneRinging = false
+                    if (!isHeadsetConnected()) pendingSpeaker = true
                     if (wakeLock?.isHeld == true) wakeLock?.release()
+                    unmuteSystemStream()
                     destroyRecognizer()
                     ToneGenerator(AudioManager.STREAM_NOTIFICATION, 100)
                         .startTone(ToneGenerator.TONE_PROP_ACK, 300)
                     telecomManager.acceptRingingCall()
-                    if (!isHeadsetConnected()) enableSpeakerphone()
                     Log.i("Voxly", "Call accepted via voice command: $command")
                 }
                 command.contains("reject") || command.contains("decline") ||
@@ -248,6 +266,7 @@ class VoiceCommandService : Service() {
                 command.contains("no") -> {
                     isPhoneRinging = false
                     if (wakeLock?.isHeld == true) wakeLock?.release()
+                    unmuteSystemStream()
                     destroyRecognizer()
                     ToneGenerator(AudioManager.STREAM_NOTIFICATION, 100)
                         .startTone(ToneGenerator.TONE_PROP_NACK, 300)
@@ -329,7 +348,9 @@ class VoiceCommandService : Service() {
     override fun onDestroy() {
         isRunning = false
         isPhoneRinging = false
+        pendingSpeaker = false
         if (wakeLock?.isHeld == true) wakeLock?.release()
+        unmuteSystemStream()
         destroyRecognizer()
         Log.i("Voxly", "Service shut down.")
         super.onDestroy()
