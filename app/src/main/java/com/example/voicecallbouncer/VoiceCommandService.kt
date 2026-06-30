@@ -222,7 +222,11 @@ class VoiceCommandService : Service() {
     }
 
     private fun isHeadsetConnected(): Boolean {
-        val devices = audioManager.getDevices(AudioManager.GET_DEVICES_OUTPUTS)
+        val devices = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {
+            audioManager.availableCommunicationDevices
+        } else {
+            audioManager.getDevices(AudioManager.GET_DEVICES_OUTPUTS).toList()
+        }
         return devices.any { device ->
             device.type == AudioDeviceInfo.TYPE_WIRED_HEADSET ||
             device.type == AudioDeviceInfo.TYPE_WIRED_HEADPHONES ||
@@ -235,13 +239,23 @@ class VoiceCommandService : Service() {
 
     @Suppress("DEPRECATION")
     private fun enableSpeakerphone() {
-        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {
-            audioManager.getDevices(AudioManager.GET_DEVICES_OUTPUTS)
-                .firstOrNull { it.type == AudioDeviceInfo.TYPE_BUILTIN_SPEAKER }
-                ?.let { audioManager.setCommunicationDevice(it) }
-        } else {
-            audioManager.isSpeakerphoneOn = true
-        }
+        // Delay 600ms — the dialer sets MODE_IN_CALL slightly after OFFHOOK fires.
+        // setCommunicationDevice and isSpeakerphoneOn both require communication mode to be active.
+        Handler(Looper.getMainLooper()).postDelayed({
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {
+                // availableCommunicationDevices returns only devices valid for active calls —
+                // more reliable than getDevices(GET_DEVICES_OUTPUTS) which includes all audio devices.
+                val speaker = audioManager.availableCommunicationDevices
+                    .firstOrNull { it.type == AudioDeviceInfo.TYPE_BUILTIN_SPEAKER }
+                if (speaker != null) {
+                    audioManager.setCommunicationDevice(speaker)
+                } else {
+                    audioManager.isSpeakerphoneOn = true
+                }
+            } else {
+                audioManager.isSpeakerphoneOn = true
+            }
+        }, 600L)
     }
 
     private fun processCommand(command: String) {
