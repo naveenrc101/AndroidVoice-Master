@@ -5,6 +5,7 @@ import android.app.*
 import android.content.*
 import android.content.pm.PackageManager
 import android.content.pm.ServiceInfo
+import android.media.AudioDeviceInfo
 import android.os.Build
 import android.os.Bundle
 import android.os.Handler
@@ -201,6 +202,31 @@ class VoiceCommandService : Service() {
         speechRecognizer = null
     }
 
+    private fun isHeadsetConnected(): Boolean {
+        val devices = audioManager.getDevices(AudioManager.GET_DEVICES_OUTPUTS)
+        return devices.any { device ->
+            device.type == AudioDeviceInfo.TYPE_WIRED_HEADSET ||
+            device.type == AudioDeviceInfo.TYPE_WIRED_HEADPHONES ||
+            device.type == AudioDeviceInfo.TYPE_BLUETOOTH_SCO ||
+            device.type == AudioDeviceInfo.TYPE_BLUETOOTH_A2DP ||
+            (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S &&
+                device.type == AudioDeviceInfo.TYPE_BLE_HEADSET)
+        }
+    }
+
+    @Suppress("DEPRECATION")
+    private fun enableSpeakerphone() {
+        Handler(Looper.getMainLooper()).postDelayed({
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {
+                audioManager.getDevices(AudioManager.GET_DEVICES_OUTPUTS)
+                    .firstOrNull { it.type == AudioDeviceInfo.TYPE_BUILTIN_SPEAKER }
+                    ?.let { audioManager.setCommunicationDevice(it) }
+            } else {
+                audioManager.isSpeakerphoneOn = true
+            }
+        }, 500L)
+    }
+
     private fun processCommand(command: String) {
         if (!isPhoneRinging) return
         try {
@@ -214,6 +240,7 @@ class VoiceCommandService : Service() {
                     ToneGenerator(AudioManager.STREAM_NOTIFICATION, 100)
                         .startTone(ToneGenerator.TONE_PROP_ACK, 300)
                     telecomManager.acceptRingingCall()
+                    if (!isHeadsetConnected()) enableSpeakerphone()
                     Log.i("Voxly", "Call accepted via voice command: $command")
                 }
                 command.contains("reject") || command.contains("decline") ||
